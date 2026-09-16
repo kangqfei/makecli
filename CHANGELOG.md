@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.5.14] - 2026-09-16
+
+### Features
+
+- **output**: `--output` now defaults to `auto`, which renders a table when stdout is a terminal and JSON when the command is piped, run in CI, or invoked by an agent. The same command serves both audiences without either having to remember the flag; explicit `--output table` / `--output json` still pin the format regardless of environment. `app deploy` without `--status` falls back to table under `auto` since JSON is only valid for status queries, so agents running a deploy are never stopped by the `--status` requirement
+- **trace**: New hidden `trace` subcommand opens the OpenObserve trace page for a given `--id` in the browser, with `--days` / `--hours` / `--minutes` selecting the search window
+
+### Tests
+
+- **notifier**: Cases asserting a pending upgrade clear the `CI` environment variable, fixing a spurious red run on GitHub Actions where `CI=true` short-circuits the decision chain
+
 ## [v0.5.13] - 2026-09-11
 
 ### Features
@@ -286,7 +297,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases before v0.3.0 (v0.1.x–v0.2.x) predate this changelog. See the
 [GitHub releases](https://github.com/qfeius/makecli/releases) for their notes.
 
-[Unreleased]: https://github.com/qfeius/makecli/compare/v0.5.13...HEAD
+[Unreleased]: https://github.com/qfeius/makecli/compare/v0.5.14...HEAD
+[v0.5.14]: https://github.com/qfeius/makecli/releases/tag/v0.5.14
 [v0.5.13]: https://github.com/qfeius/makecli/releases/tag/v0.5.13
 [v0.5.12]: https://github.com/qfeius/makecli/releases/tag/v0.5.12
 [v0.5.11]: https://github.com/qfeius/makecli/releases/tag/v0.5.11
