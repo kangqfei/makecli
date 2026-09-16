@@ -40,13 +40,14 @@ func newEntityListCmd() *cobra.Command {
 
 	cmd.Flags().IntVar(&page, "page", 1, "page number to fetch (starts from 1)")
 	cmd.Flags().IntVar(&size, "size", 20, "number of entities per page")
-	cmd.Flags().StringVar(&output, "output", outputTable, "output format (table|json)")
+	addOutputFlag(cmd, &output)
 	cmd.Flags().StringVar(&filter, "filter", "", `filter expression, e.g. "name=任务" or "key=task" (comma = OR)`)
 	return cmd
 }
 
 func runEntityList(appKey, entityKey string, page, size int, output, filterExpr string) error {
-	if err := validateOutputFormat(output); err != nil {
+	output, err := resolveOutputFormat(output)
+	if err != nil {
 		return err
 	}
 	if page < 1 {

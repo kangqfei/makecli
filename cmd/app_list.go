@@ -33,7 +33,7 @@ func newAppListCmd() *cobra.Command {
 
 	cmd.Flags().IntVar(&page, "page", 1, "page number to fetch (starts from 1)")
 	cmd.Flags().IntVar(&size, "size", 20, "number of apps per page")
-	cmd.Flags().StringVar(&output, "output", outputTable, "output format (table|json)")
+	addOutputFlag(cmd, &output)
 	cmd.Flags().StringVar(&filter, "filter", "", `filter expression, e.g. "name=待办,key=todo" (comma = OR; key 等值匹配, name/description 模糊匹配)`)
 	return cmd
 }
@@ -77,7 +77,8 @@ func celString(s string) string {
 }
 
 func runAppList(page, size int, output, filterExpr string) error {
-	if err := validateOutputFormat(output); err != nil {
+	output, err := resolveOutputFormat(output)
+	if err != nil {
 		return err
 	}
 	if page < 1 {

@@ -39,13 +39,14 @@ func newRelationListCmd() *cobra.Command {
 
 	cmd.Flags().IntVar(&page, "page", 1, "page number to fetch (starts from 1)")
 	cmd.Flags().IntVar(&size, "size", 20, "number of relations per page")
-	cmd.Flags().StringVar(&output, "output", outputTable, "output format (table|json)")
+	addOutputFlag(cmd, &output)
 	cmd.Flags().StringVar(&filter, "filter", "", `filter expression, e.g. "name=项目" or "key=project_has_tasks" (comma = OR)`)
 	return cmd
 }
 
 func runRelationList(appKey, relationKey string, page, size int, output, filterExpr string) error {
-	if err := validateOutputFormat(output); err != nil {
+	output, err := resolveOutputFormat(output)
+	if err != nil {
 		return err
 	}
 	if page < 1 {

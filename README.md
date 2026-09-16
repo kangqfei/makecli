@@ -153,11 +153,12 @@ makecli version
 
 ### 列出 App
 ```bash
-# 默认表格输出
+# 终端里默认表格输出；被管道 / 脚本 / AI Agent 调用时自动切为 JSON
 makecli app list
 
-# JSON 输出
+# 显式指定输出格式（不受终端环境影响）
 makecli app list --output json
+makecli app list --output table
 
 # 分页查看第 2 页，每页 10 条
 makecli app list --page 2 --size 10
@@ -165,13 +166,14 @@ makecli app list --page 2 --size 10
 
 `app list` 支持的输出格式：
 
-- `--output table` 默认表格输出
+- `--output auto`（默认）stdout 是终端则表格，否则（管道、CI、AI Agent 调用）JSON
+- `--output table` 强制表格输出
 - `--output json` 输出 `data` 和 `pagination`，便于脚本或 AI Agent 消费
 - 列表模式支持 `--page` 和 `--size`，其中 `--page` 默认从 `1` 开始
 
 ### 列出 Entity
 ```bash
-# 列出指定 app 下的全部 entity（默认表格输出）
+# 列出指定 app 下的全部 entity（终端默认表格，管道/Agent 下默认 JSON）
 makecli entity --app TODO list
 
 # 以 JSON 输出 entity 列表
@@ -189,7 +191,8 @@ makecli entity --app TODO list Task --output json
 
 `entity list` 支持的输出格式：
 
-- `--output table` 默认表格/详情文本输出
+- `--output auto`（默认）终端为表格/详情文本，管道/Agent 下为 JSON
+- `--output table` 强制表格/详情文本输出
 - `--output json` 列表模式输出 `data` 和 `pagination`，详情模式输出单个 `data` 对象
 - 列表模式支持 `--page` 和 `--size`，其中 `--page` 默认从 `1` 开始
 

@@ -323,7 +323,8 @@ func runDaemonStatus() error {
 	if err := ensureLaunchdSupported("status"); err != nil {
 		return err
 	}
-	if err := validateOutputFormat(daemonStatusOutput); err != nil {
+	output, err := resolveOutputFormat(daemonStatusOutput)
+	if err != nil {
 		return err
 	}
 	status, err := launchdQuery()
@@ -343,7 +344,7 @@ func runDaemonStatus() error {
 		lastExit := status.LastExitStatus
 		result.LastExitStatus = &lastExit
 	}
-	if daemonStatusOutput == outputJSON {
+	if output == outputJSON {
 		result.State = strings.ReplaceAll(result.State, " ", "_")
 		return writeJSON(result)
 	}
@@ -398,6 +399,6 @@ func renderDaemonStatus(result daemonStatusResult, installed bool) {
 }
 
 func init() {
-	daemonStatusCmd.Flags().StringVarP(&daemonStatusOutput, "output", "o", outputTable, "输出格式(table|json)")
+	daemonStatusCmd.Flags().StringVarP(&daemonStatusOutput, "output", "o", outputAuto, "输出格式(auto|table|json)，auto 在终端为 table、管道/agent 下为 json")
 	daemonCmd.AddCommand(daemonStartCmd, daemonStopCmd, daemonRestartCmd, daemonStatusCmd, daemonUninstallCmd)
 }

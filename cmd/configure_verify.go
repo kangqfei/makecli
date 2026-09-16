@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 internal/config（LoadConfig）、internal/api（New/WithHeaders）、cmd/client（resolveAccessToken/metaServerURL/resolveEnvironment/tokenSource 常量/EnvAccessToken）、cmd/output（outputJSON/validateOutputFormat/writeJSON）、encoding/base64、encoding/json、fmt、os、strings、time
+ * [INPUT]: 依赖 internal/config（LoadConfig）、internal/api（New/WithHeaders）、cmd/client（resolveAccessToken/metaServerURL/resolveEnvironment/tokenSource 常量/EnvAccessToken）、cmd/output（outputJSON/resolveOutputFormat/writeJSON）、encoding/base64、encoding/json、fmt、os、strings、time
  * [OUTPUT]: 对外提供 newConfigureVerifyCmd 函数；包内 parseJWTTimeClaims 免验签提取 iat/exp、renewTokenHint 按 token 来源给换 token 指引
  * [POS]: cmd/configure 的 verify 子命令，token 走 resolveAccessToken 取值链（结果带 source 字段），本地 exp fail-closed 判定 + 在线验证 token 有效性并输出 profile 状态
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -39,7 +39,7 @@ func newConfigureVerifyCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&output, "output", outputTable, "output format (table|json)")
+	addOutputFlag(cmd, &output)
 	return cmd
 }
 
@@ -86,7 +86,8 @@ func parseJWTTimeClaims(token string) (issuedAt, expiresAt time.Time, err error)
 }
 
 func runConfigureVerify(output string) (*verifyResult, error) {
-	if err := validateOutputFormat(output); err != nil {
+	output, err := resolveOutputFormat(output)
+	if err != nil {
 		return nil, err
 	}
 

@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 cmd/client（newClientFromProfile/newRepoClientFromProfile）、cmd/app（loadAppManifestFromFile/validResourceKey）、cmd/app_create（appDSLPath）、cmd/git（openRepo/assertDeployable）、cmd/output（validateOutputFormat/writeJSON）、internal/api（ErrNotFound 哨兵、GetBuildTask/BuildTask 及 Finished/Succeeded 终态判定、GetDeploymentOverview/DeploymentOverview.Env 环境 URL）、errors、fmt、io、os、slices、strings、time、charm.land/huh/v2（production 确认表单）、github.com/mattn/go-isatty（TTY 检测）、github.com/go-git/go-git/v5（及 config/plumbing/transport/http 子包）、github.com/spf13/cobra
+ * [INPUT]: 依赖 cmd/client（newClientFromProfile/newRepoClientFromProfile）、cmd/app（loadAppManifestFromFile/validResourceKey）、cmd/app_create（appDSLPath）、cmd/git（openRepo/assertDeployable）、cmd/output（resolveOutputFormat/writeJSON/outputAuto/outputFlagUsage）、internal/api（ErrNotFound 哨兵、GetBuildTask/BuildTask 及 Finished/Succeeded 终态判定、GetDeploymentOverview/DeploymentOverview.Env 环境 URL）、errors、fmt、io、os、slices、strings、time、charm.land/huh/v2（production 确认表单）、github.com/mattn/go-isatty（TTY 检测）、github.com/go-git/go-git/v5（及 config/plumbing/transport/http 子包）、github.com/spf13/cobra
  * [OUTPUT]: 对外提供 newDeployCmd 函数；包内 assertAppRegistered（push 前 Meta 注册门控）、confirmProductionDeploy（production 部署确认）、runDeployStatus/waitAndRenderBuild/waitForBuild/deploymentURLFor/renderBuildResult/renderBuildStatus/formatBuildError/shortSha（--status/--wait 构建进度查询、等待与渲染）、buildStatusView（JSON 视图：BuildTask 平铺 + url omitempty）、errBuildFailed/errWaitTimeout 退出码哨兵（errors.go ExitCode 翻译为 2/124）、defaultWaitTimeout 常量；包级 gitPushFunc / confirmDeployFunc 可打桩变量（测试替换推送 / 终端交互，参照 update.go applyFunc、app_delete.go confirmDeleteFunc 模式）、buildPollInterval 可打桩轮询间隔；envPreview/envProduction 环境常量
  * [POS]: cmd 模块 app 命令组的 deploy 子命令——「纯 push 已提交状态」。--env 默认 envPreview（安全），production 须显式 opt-in 且 push 前过 continue/abort 确认（--yes/-y 跳过，非交互终端拒绝并指引 --yes）。--status 短路部署，改为按本地 HEAD sha 反查构建服务（api.GetBuildTask，commitSha 即任务定位键）平铺渲染部署进度；--output table|json 双格式（json 仅限 --status 模式，deploy 推送输出会混入 stdout）。--wait 阻塞至构建终态（deploy --wait = push 后接上与 --status --wait 完全同一条等待路径）：轮询间隔 buildPollInterval=3s，ErrNotFound 视为「任务尚未创建」继续等（webhook 异步建任务窗口期），进度只在 status/phase 跃迁时打一行（json 模式走 stderr 保持 stdout 纯 JSON），--timeout 有界兜底（默认 5m，须与 --wait 搭配）；终态渲染完整详情后，未成功以 errBuildFailed（退出码 2）、超时以 errWaitTimeout（退出码 124）上抛，CI/agent 凭退出码判定。成功任务经 deploymentURLFor 带出对应环境访问 URL（与 app info 同源 GetDeploymentOverview，按 task.Environment 经 Env 选择器取址；URL 是结果装饰——仅 SUCCESS 查询、总览失败降级为空不影响主输出），table 尾行 URL:、json 平铺 url 字段。从 apps/dsl/app.yaml 读 app key，
  *        本地先行门控（openRepo 要求已 init、assertDeployable 要求有 commit 且工作树干净，脏/无仓库/无提交即报错，
@@ -91,9 +91,15 @@ func newDeployCmd() *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := validateOutputFormat(output); err != nil {
+			// 无 --status 时 json 不合法：auto 直接落回 table（agent 跑 deploy 也该拿到推送日志，而不是报错）
+			if !status && output == outputAuto {
+				output = outputTable
+			}
+			format, err := resolveOutputFormat(output)
+			if err != nil {
 				return err
 			}
+			output = format
 			if output == outputJSON && !status {
 				return errors.New("--output json 需要与 --status 搭配（deploy 的推送输出会混入 stdout）")
 			}
@@ -123,7 +129,7 @@ func newDeployCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&status, "status", false, "show build status of the current HEAD commit instead of deploying")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until the build reaches a terminal state (SUCCESS/FAILED/CANCELED)")
 	cmd.Flags().DurationVar(&timeout, "timeout", defaultWaitTimeout, "max time to wait for the build (requires --wait)")
-	cmd.Flags().StringVar(&output, "output", outputTable, "output format (table|json), json requires --status")
+	cmd.Flags().StringVar(&output, "output", outputAuto, outputFlagUsage+"; json requires --status")
 	return cmd
 }
 

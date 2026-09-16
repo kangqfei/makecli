@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 cmd 包内 writeJSON / attachNotice（白盒）、stdout_test 的 captureStdout；internal/notifier 的 SetPendingForTest / Update
- * [OUTPUT]: 覆盖 writeJSON 无提示时输出逐字节不变、有提示时 _notice.update 追加为末尾成员且原字段顺序不动、attachNotice 对对象/空对象/数组/null 的处理
+ * [INPUT]: 依赖 cmd 包内 resolveOutputFormat / stdoutIsTerminal / addOutputFlag / writeJSON / attachNotice（白盒）、stdout_test 的 captureStdout；internal/notifier 的 SetPendingForTest / Update；github.com/spf13/cobra
+ * [OUTPUT]: 覆盖 resolveOutputFormat 的 auto 按 TTY 落定 table/json、显式值透传、非法值拒绝，addOutputFlag 默认 auto；writeJSON 无提示时输出逐字节不变、有提示时 _notice.update 追加为末尾成员且原字段顺序不动、attachNotice 对对象/空对象/数组/null 的处理
  * [POS]: cmd 模块 output.go 的配套测试
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -13,7 +13,60 @@ import (
 	"testing"
 
 	"github.com/qfeius/makecli/internal/notifier"
+	"github.com/spf13/cobra"
 )
+
+func stubStdoutTerminal(t *testing.T, isTTY bool) {
+	t.Helper()
+	old := stdoutIsTerminal
+	stdoutIsTerminal = func() bool { return isTTY }
+	t.Cleanup(func() { stdoutIsTerminal = old })
+}
+
+func TestResolveOutputFormat(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		tty   bool
+		want  string
+	}{
+		{"auto on terminal renders table", outputAuto, true, outputTable},
+		{"auto when piped renders json", outputAuto, false, outputJSON},
+		{"explicit table ignores tty", outputTable, false, outputTable},
+		{"explicit json ignores tty", outputJSON, true, outputJSON},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stubStdoutTerminal(t, tc.tty)
+			got, err := resolveOutputFormat(tc.input)
+			if err != nil {
+				t.Fatalf("resolveOutputFormat(%q): %v", tc.input, err)
+			}
+			if got != tc.want {
+				t.Fatalf("resolveOutputFormat(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+
+	t.Run("rejects unknown format", func(t *testing.T) {
+		_, err := resolveOutputFormat("yaml")
+		if err == nil || !strings.Contains(err.Error(), "unsupported output format") {
+			t.Fatalf("expected unsupported format error, got %v", err)
+		}
+	})
+}
+
+func TestAddOutputFlagDefaultsToAuto(t *testing.T) {
+	var output string
+	cmd := &cobra.Command{Use: "x"}
+	addOutputFlag(cmd, &output)
+	if err := cmd.ParseFlags(nil); err != nil {
+		t.Fatalf("ParseFlags: %v", err)
+	}
+	if output != outputAuto {
+		t.Fatalf("default --output = %q, want %q", output, outputAuto)
+	}
+}
 
 func setPendingUpdate(t *testing.T, u *notifier.Update) {
 	t.Helper()

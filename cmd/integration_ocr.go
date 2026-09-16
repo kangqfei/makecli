@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 cmd/client（newClientFromProfile）、cmd/output（writeJSON / validateOutputFormat）、internal/api（OCROptions）、fmt、os、path/filepath、strings、github.com/olekukonko/tablewriter、github.com/spf13/cobra
+ * [INPUT]: 依赖 cmd/client（newClientFromProfile）、cmd/output（writeJSON / resolveOutputFormat）、internal/api（OCROptions）、fmt、os、path/filepath、strings、github.com/olekukonko/tablewriter、github.com/spf13/cobra
  * [OUTPUT]: 对外提供 newIntegrationOCRCmd 函数
  * [POS]: cmd/integration 的 ocr 子命令，上传本地 PDF/PNG/JPG/OFD 给 OCR 服务并按 spec 渲染票据结构化结果
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -69,7 +69,7 @@ func newIntegrationOCRCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&file, "file", "f", "", "path to PDF/OFD/PNG/JPG file (required)")
-	cmd.Flags().StringVar(&output, "output", outputTable, "output format (table|json)")
+	addOutputFlag(cmd, &output)
 	cmd.Flags().Int64Var(&businessID, "business-id", 0, "business document ID (multipart business_id)")
 	cmd.Flags().BoolVar(&verifyVAT, "verify-vat", true, "enable invoice authenticity verification (server default: true)")
 	cmd.Flags().BoolVar(&coordRestoreOriginal, "coord-restore-original", false, "return coordinates against the original image (default: cropped image)")
@@ -83,7 +83,8 @@ func newIntegrationOCRCmd() *cobra.Command {
 }
 
 func runIntegrationOCR(file, output string, opts api.OCROptions) error {
-	if err := validateOutputFormat(output); err != nil {
+	output, err := resolveOutputFormat(output)
+	if err != nil {
 		return err
 	}
 	ext := strings.ToLower(filepath.Ext(file))

@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 internal/api（ErrAuthFailed/UserInfo/GetUserInfo）、internal/config（Load/ValidateProfileName）、cmd/client（newClientFromProfile/envName）、cmd/login（runLogin/defaultLoginTimeout）、cmd/output（validateOutputFormat/writeJSON）、errors、fmt、os、github.com/olekukonko/tablewriter、github.com/spf13/cobra
+ * [INPUT]: 依赖 internal/api（ErrAuthFailed/UserInfo/GetUserInfo）、internal/config（Load/ValidateProfileName）、cmd/client（newClientFromProfile/envName）、cmd/login（runLogin/defaultLoginTimeout）、cmd/output（resolveOutputFormat/writeJSON）、errors、fmt、os、github.com/olekukonko/tablewriter、github.com/spf13/cobra
  * [OUTPUT]: 对外提供 newWhoamiCmd 函数
  * [POS]: cmd 模块的 whoami 顶级命令，展示当前 token 对应的用户身份（表格列序 User ID/Name/Tenant ID/Tenant/Profile/Environment）；未登录/凭证失效时自动触发 login 流程（wrangler whoami 式交互）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -32,7 +32,7 @@ func newWhoamiCmd() *cobra.Command {
 			return runWhoami(output)
 		},
 	}
-	cmd.Flags().StringVar(&output, "output", outputTable, "output format (table|json)")
+	addOutputFlag(cmd, &output)
 	return cmd
 }
 
@@ -40,7 +40,8 @@ func newWhoamiCmd() *cobra.Command {
 // 无 token 先登录再查；有 token 直接查，鉴权失败（过期/失效）登录后重试一次，
 // 重试仍失败则原样上抛（errors.go 会升级为引导文案）。token 取值链见 resolveAccessToken。
 func runWhoami(output string) error {
-	if err := validateOutputFormat(output); err != nil {
+	output, err := resolveOutputFormat(output)
+	if err != nil {
 		return err
 	}
 	if err := config.ValidateProfileName(Profile); err != nil {

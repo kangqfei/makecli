@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 cmd/client（newClientFromProfile）、internal/api（Client/GetApp/ListEntities/ListRelations/Entity/Relation/UniqueConstraint/RelationProperties/RelationEnd）、cmd/apply（loadManifestsFromFile/Dir/ResourceManifest/getFieldMap/extractUniqueConstraints）、cmd/output（validateOutputFormat/writeJSON）、encoding/json、errors、fmt、os、reflect、slices、sort、strings
+ * [INPUT]: 依赖 cmd/client（newClientFromProfile）、internal/api（Client/GetApp/ListEntities/ListRelations/Entity/Relation/UniqueConstraint/RelationProperties/RelationEnd）、cmd/apply（loadManifestsFromFile/Dir/ResourceManifest/getFieldMap/extractUniqueConstraints）、cmd/output（resolveOutputFormat/writeJSON）、encoding/json、errors、fmt、os、reflect、slices、sort、strings
  * [OUTPUT]: 对外提供 newDiffCmd 函数、errDiffFound 哨兵错误
  * [POS]: cmd 模块的顶层 diff 命令，对比远端 Meta Server 上的 App DSL（Entity + Relation + 唯一性约束）与本地 YAML 文件的差异；Entity 按 Key 匹配，Field 按 Key、唯一性约束按 name（字段顺序敏感）匹配；有差异时返回 errDiffFound（由 Execute 转译为退出码 1），实现 CI 漂移门禁；目录扫描与 apply 同款 --max-depth（默认 2，0=不限），确保 diff/apply 对「哪些文件构成 app」判定一致
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -50,7 +50,7 @@ The app name is inferred from the Make.App manifest or entity's app field in the
 	}
 
 	cmd.Flags().StringVarP(&path, "file", "f", "", "path to YAML file or directory (required)")
-	cmd.Flags().StringVar(&output, "output", outputTable, "output format (table|json)")
+	addOutputFlag(cmd, &output)
 	cmd.Flags().IntVar(&maxDepth, "max-depth", 2, "directory recursion depth (1=top level, 2=+subdirs, 0=unlimited)")
 	_ = cmd.MarkFlagRequired("file")
 	return cmd
@@ -115,7 +115,8 @@ const (
 // ---------------------------------- 执行函数 ----------------------------------
 
 func runDiff(path, output string, maxDepth int) error {
-	if err := validateOutputFormat(output); err != nil {
+	output, err := resolveOutputFormat(output)
+	if err != nil {
 		return err
 	}
 	if maxDepth < 0 {

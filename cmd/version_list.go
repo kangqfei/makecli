@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 cmd/output（writeJSON / validateOutputFormat / outputTable / outputJSON）、internal/update（ListReleases）、internal/build（Version）、fmt、os、strings、github.com/olekukonko/tablewriter、github.com/spf13/cobra
+ * [INPUT]: 依赖 cmd/output（writeJSON / resolveOutputFormat / outputTable / outputJSON）、internal/update（ListReleases）、internal/build（Version）、fmt、os、strings、github.com/olekukonko/tablewriter、github.com/spf13/cobra
  * [OUTPUT]: 对外提供 newVersionListCmd 函数（包内）
  * [POS]: cmd 模块 version 子命令下的 list 子命令，列出 GitHub 上的历史 release（TYPE 列标注 Pre-release，对齐 gh release list）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -30,7 +30,7 @@ func newVersionListCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 20, "number of releases to fetch (1-100)")
-	cmd.Flags().StringVar(&output, "output", outputTable, "output format (table|json)")
+	addOutputFlag(cmd, &output)
 	return cmd
 }
 
@@ -38,7 +38,8 @@ func runVersionList(limit int, output string) error {
 	if limit < 1 || limit > 100 {
 		return fmt.Errorf("limit must be between 1 and 100")
 	}
-	if err := validateOutputFormat(output); err != nil {
+	output, err := resolveOutputFormat(output)
+	if err != nil {
 		return err
 	}
 

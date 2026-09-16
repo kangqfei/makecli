@@ -32,12 +32,13 @@ func newAppInfoCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&output, "output", outputTable, "output format (table|json)")
+	addOutputFlag(cmd, &output)
 	return cmd
 }
 
 func runAppInfo(appKey, output string) error {
-	if err := validateOutputFormat(output); err != nil {
+	output, err := resolveOutputFormat(output)
+	if err != nil {
 		return err
 	}
 	if err := validResourceKey(appKey); err != nil {

@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 依赖 bytes、encoding/json、fmt、os；依赖 internal/notifier 的 Pending
- * [OUTPUT]: 对外提供 list 命令通用的输出格式校验和 JSON 编码辅助函数；包内 attachNotice 把 _notice 追加到顶层 JSON 对象末尾
- * [POS]: cmd 模块的输出层辅助，所有 --output json 的唯一 stdout 出口；有待提示更新时在顶层对象末尾追加 _notice.update（对齐 lark-cli：agent 在非 TTY 下也能收到升级提示，stderr 文本提示只给 TTY 上的人看）
+ * [INPUT]: 依赖 bytes、encoding/json、fmt、os、github.com/mattn/go-isatty、github.com/spf13/cobra；依赖 internal/notifier 的 Pending
+ * [OUTPUT]: 对外提供 --output 旗标注册（addOutputFlag）、格式解析（resolveOutputFormat：auto 按 stdout TTY 落到 table/json）和 JSON 编码辅助函数；包内 stdoutIsTerminal 可打桩探针、attachNotice 把 _notice 追加到顶层 JSON 对象末尾
+ * [POS]: cmd 模块的输出层辅助，--output 三态 auto|table|json 的单一真相源（默认 auto：人在终端看表格，agent/管道/CI 收 JSON），所有 --output json 的唯一 stdout 出口；有待提示更新时在顶层对象末尾追加 _notice.update（对齐 lark-cli：agent 在非 TTY 下也能收到升级提示，stderr 文本提示只给 TTY 上的人看）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -13,20 +13,40 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/mattn/go-isatty"
 	"github.com/qfeius/makecli/internal/notifier"
+	"github.com/spf13/cobra"
 )
 
 const (
+	outputAuto  = "auto"
 	outputTable = "table"
 	outputJSON  = "json"
 )
 
-func validateOutputFormat(output string) error {
+const outputFlagUsage = "output format (auto|table|json); auto = table on a terminal, json when piped or run by an agent"
+
+// stdoutIsTerminal 是 auto 的唯一判定信号：stdout 连着终端即人在看，否则是管道/agent/CI 在消费。
+// 包级变量供测试打桩。
+var stdoutIsTerminal = func() bool { return isatty.IsTerminal(os.Stdout.Fd()) }
+
+// addOutputFlag 注册标准 --output 旗标，默认 auto。
+func addOutputFlag(cmd *cobra.Command, output *string) {
+	cmd.Flags().StringVar(output, "output", outputAuto, outputFlagUsage)
+}
+
+// resolveOutputFormat 把 --output 解析为最终的 table 或 json：auto 按 stdout 是否为 TTY 落定，非法值报错。
+func resolveOutputFormat(output string) (string, error) {
 	switch output {
+	case outputAuto:
+		if stdoutIsTerminal() {
+			return outputTable, nil
+		}
+		return outputJSON, nil
 	case outputTable, outputJSON:
-		return nil
+		return output, nil
 	default:
-		return fmt.Errorf("unsupported output format %q, valid options: %s, %s", output, outputTable, outputJSON)
+		return "", fmt.Errorf("unsupported output format %q, valid options: %s, %s, %s", output, outputAuto, outputTable, outputJSON)
 	}
 }
 

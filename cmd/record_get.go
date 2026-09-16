@@ -29,12 +29,13 @@ func newRecordGetCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&output, "output", outputTable, "output format (table|json)")
+	addOutputFlag(cmd, &output)
 	return cmd
 }
 
 func runRecordGet(appKey, entityKey, recordID, output string) error {
-	if err := validateOutputFormat(output); err != nil {
+	output, err := resolveOutputFormat(output)
+	if err != nil {
 		return err
 	}
 

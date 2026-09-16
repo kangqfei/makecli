@@ -28,7 +28,7 @@ func newSkillsCmd() *cobra.Command {
 			return runSkillsList(cmd.Context(), output, all)
 		},
 	}
-	cmd.Flags().StringVar(&output, "output", outputTable, "output format (table|json)")
+	addOutputFlag(cmd, &output)
 	cmd.Flags().BoolVar(&all, "all", false, "include not-installed skills from the remote catalog")
 	cmd.AddCommand(newSkillsListCmd())
 	cmd.AddCommand(newSkillsInstallCmd())

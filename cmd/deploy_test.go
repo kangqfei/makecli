@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 cmd 包内的 runDeploy / runDeployStatus / pushCurrentHead / gitPushFunc / buildPollInterval / errBuildFailed / errWaitTimeout / initGitRepo / stageAndCommit（包内白盒）、enterAppDir(写 apps/dsl/app.yaml + chdir)、gitCommitAll(init+commit 当前目录)，encoding/json、errors、fmt、net/http、net/http/httptest、os、path/filepath、strings、testing、time、github.com/go-git/go-git/v5（及 plumbing/object 子包）
- * [OUTPUT]: 覆盖 deploy 子命令核心逻辑的单元测试（runDeploy 编排：本地真仓库门控 + Meta 注册门控（GetApp）+ production 确认门控 + gitPushFunc 桩隔离推送；app 未注册/校验错误/production abort 均短路在触达仓库服务之前且不 push；--yes 与 preview 不触发确认；非交互真门控拒绝 production 并指引 --yes；默认 env=preview；pushCurrentHead 真 go-git 推到本地裸仓库；fail-fast 脏/无仓库/无提交报错且不触网；--wait 等待：轮询至 SUCCESS/FAILED/CANCELED 终态、跃迁行去重、not-found 窗口期容忍、errBuildFailed/errWaitTimeout 哨兵、查询错误即刻失败、json 模式 stdout 纯 JSON 进度走 stderr；成功带出环境 URL：preview/production 按 task.Environment 选址、失败不渲染 URL、总览失败降级为空不阻断、json 平铺 url 字段、快照同路径；--output json 快照；旗标组合校验先于门控）
+ * [OUTPUT]: 覆盖 deploy 子命令核心逻辑的单元测试（runDeploy 编排：本地真仓库门控 + Meta 注册门控（GetApp）+ production 确认门控 + gitPushFunc 桩隔离推送；app 未注册/校验错误/production abort 均短路在触达仓库服务之前且不 push；--yes 与 preview 不触发确认；非交互真门控拒绝 production 并指引 --yes；默认 env=preview；pushCurrentHead 真 go-git 推到本地裸仓库；fail-fast 脏/无仓库/无提交报错且不触网；--wait 等待：轮询至 SUCCESS/FAILED/CANCELED 终态、跃迁行去重、not-found 窗口期容忍、errBuildFailed/errWaitTimeout 哨兵、查询错误即刻失败、json 模式 stdout 纯 JSON 进度走 stderr；成功带出环境 URL：preview/production 按 task.Environment 选址、失败不渲染 URL、总览失败降级为空不阻断、json 平铺 url 字段、快照同路径；--output json 快照；旗标组合校验先于门控；默认 auto 无 --status 时落回 table 不报错）
  * [POS]: cmd 模块 deploy.go 的配套测试，用 httptest 隔离网络（newAppExistsMeta 放行注册门控、newBuildSeqMeta 按序答复构建快照模拟状态推进且兼答注册门控与部署总览 URL 夹具（previewURLFixture/productionURLFixture）、stubMetaServer 临时指向 Meta、newMockRepoServer 答仓库地址、noNetRepoServer 证短路不触网）、gitPushFunc 打桩隔离推送、stubPollInterval 调小轮询间隔、stubConfirmDeploy 打桩 confirmDeployFunc 隔离终端确认、临时裸仓库做本地 remote 验证真实 go-git 行为
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -795,6 +795,7 @@ func TestDeployStatusFlagShortCircuitsDeploy(t *testing.T) {
 	t.Cleanup(func() { RepoServerURL = "" })
 	p := &pushCall{}
 	p.install(t)
+	stubStdoutTerminal(t, true) // 默认 --output auto：钉成终端视角，本测试断言的是 table 渲染
 
 	cmd := newDeployCmd()
 	cmd.SetArgs([]string{"--status"})
@@ -1106,6 +1107,20 @@ func TestDeployFlagValidation(t *testing.T) {
 				t.Fatalf("args %v: want error containing %q, got %v", c.args, c.want, err)
 			}
 		})
+	}
+}
+
+// TestDeployAutoOutputWithoutStatusFallsBackToTable：默认 --output auto 在管道下解析为 json，
+// 但无 --status 时 json 不合法——auto 必须静默落回 table 而非把 agent 挡在「需要 --status」上。
+// 测试目录无工程文件：校验放行后撞上的是 app.yaml 缺失，正是「没被 --status 拦住」的证据。
+func TestDeployAutoOutputWithoutStatusFallsBackToTable(t *testing.T) {
+	stubStdoutTerminal(t, false)
+	chdir(t, t.TempDir())
+	cmd := newDeployCmd()
+	cmd.SetArgs([]string{})
+	err := cmd.Execute()
+	if err == nil || strings.Contains(err.Error(), "--status") {
+		t.Fatalf("auto output must not demand --status, got %v", err)
 	}
 }
 

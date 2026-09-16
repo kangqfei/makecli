@@ -50,7 +50,7 @@ expression evaluated server-side (a subset of https://cel.dev).`,
 
 	cmd.Flags().IntVar(&page, "page", 1, "page number (starts from 1)")
 	cmd.Flags().IntVar(&size, "size", 20, "records per page")
-	cmd.Flags().StringVar(&output, "output", outputTable, "output format (table|json)")
+	addOutputFlag(cmd, &output)
 	cmd.Flags().StringVar(&fields, "fields", "", "comma-separated field keys to display")
 	cmd.Flags().StringVar(&sortSpec, "sort", "", "sort specification, e.g. createdAt:desc,id:asc (fieldKey:order)")
 	cmd.Flags().StringVar(&filter, "filter", "", "CEL filter expression evaluated server-side (see EXAMPLES)")
@@ -58,7 +58,8 @@ expression evaluated server-side (a subset of https://cel.dev).`,
 }
 
 func runRecordList(appKey, entityKey string, page, size int, output, fields, sortSpec, filter string) error {
-	if err := validateOutputFormat(output); err != nil {
+	output, err := resolveOutputFormat(output)
+	if err != nil {
 		return err
 	}
 	if page < 1 {
