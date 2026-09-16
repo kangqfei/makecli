@@ -30,18 +30,21 @@ func TestLookupEnvironment(t *testing.T) {
 				RepoServerURL:   "https://dev-make-repo.qtech.cn",
 				AuthServerURL:   "https://dev-myaccount.qtech.cn",
 				AgentGatewayURL: "https://dev-make-agent.qtech.cn",
+				TraceServerURL:  "https://openobserve.qtech.cn",
 			},
 			"test": {
 				MetaServerURL:   "https://test-make.qtech.cn",
 				RepoServerURL:   "https://test-make-repo.qtech.cn",
 				AuthServerURL:   "https://test-myaccount.qtech.cn",
 				AgentGatewayURL: "https://test-make-agent.qtech.cn",
+				TraceServerURL:  "https://openobserve.qtech.cn",
 			},
 			"production": {
 				MetaServerURL:   "https://make.qfei.cn",
 				RepoServerURL:   "https://make-repo.qfei.cn",
 				AuthServerURL:   "https://myaccount.qfei.cn",
 				AgentGatewayURL: "https://make-agent.qfei.cn",
+				TraceServerURL:  "https://openobserve.qfei.cn",
 			},
 		}
 		for name, want := range cases {
