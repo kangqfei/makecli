@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 cmd 包内的 resolveAccessToken / metaServerURL / repoServerURL / resolveEnvironment / 全局 AccessToken / MetaServerURL / RepoServerURL / Environment（白盒），internal/config（Save/SetSetting）、testing
+ * [INPUT]: 依赖 cmd 包内的 resolveAccessToken / metaServerURL / repoServerURL / resolveEnvironment / 全局 AccessToken / MetaServerURL / Environment（白盒），internal/config（Save/SetSetting）、testing
  * [OUTPUT]: 覆盖 token 取值链（--access-token > $MAKE_ACCESS_TOKEN > credentials）、主机地址取值链（flag > $MAKE_*_SERVER_URL > profile config > 环境内置地址）、环境解析优先级（flag > settings > 默认）与 withGateway 网关前缀拼接的单元测试
  * [POS]: cmd 模块 client.go resolveAccessToken / resolveEnvironment / withGateway 的配套测试，t.Setenv 隔离配置
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -67,16 +67,16 @@ func TestResolveAccessToken(t *testing.T) {
 	}
 }
 
-// setServerURLFlags 临时覆盖全局 MetaServerURL / RepoServerURL，结束自动还原。
-func setServerURLFlags(t *testing.T, meta, repo string) {
+// setMetaServerURLFlag 临时覆盖全局 MetaServerURL，结束自动还原。
+func setMetaServerURLFlag(t *testing.T, meta string) {
 	t.Helper()
-	oldMeta, oldRepo := MetaServerURL, RepoServerURL
-	MetaServerURL, RepoServerURL = meta, repo
-	t.Cleanup(func() { MetaServerURL, RepoServerURL = oldMeta, oldRepo })
+	old := MetaServerURL
+	MetaServerURL = meta
+	t.Cleanup(func() { MetaServerURL = old })
 }
 
-// TestServerURLChain 锁定主机地址取值链契约：flag > env > profile config > 环境内置地址，
-// meta / repo 两条链同构，与 access token 的三级可配置来源对齐。
+// TestServerURLChain 锁定主机地址取值链契约：flag > env > profile config > 环境内置地址；
+// repo 链同构但没有 flag 级（代码仓库主机是部署实现细节），flag 只影响 meta。
 func TestServerURLChain(t *testing.T) {
 	cp := config.ConfigProfile{MetaServerURL: "https://cfg-meta", RepoServerURL: "https://cfg-repo"}
 	env := config.Environment{MetaServerURL: "https://preset-meta", RepoServerURL: "https://preset-repo"}
@@ -86,14 +86,14 @@ func TestServerURLChain(t *testing.T) {
 		cp                 config.ConfigProfile
 		wantMeta, wantRepo string
 	}{
-		{"flag over everything", "https://flag", "https://env", cp, "https://flag", "https://flag"},
+		{"flag over everything (meta only; repo has no flag)", "https://flag", "https://env", cp, "https://flag", "https://env"},
 		{"env over config", "", "https://env", cp, "https://env", "https://env"},
 		{"config over preset", "", "", cp, "https://cfg-meta", "https://cfg-repo"},
 		{"preset when nothing set", "", "", config.ConfigProfile{}, "https://preset-meta", "https://preset-repo"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			setServerURLFlags(t, tc.flag, tc.flag)
+			setMetaServerURLFlag(t, tc.flag)
 			t.Setenv(EnvMetaServerURL, tc.envVar)
 			t.Setenv(EnvRepoServerURL, tc.envVar)
 			if got := metaServerURL(tc.cp, env); got != tc.wantMeta {

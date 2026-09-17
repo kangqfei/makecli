@@ -145,8 +145,7 @@ func setupDeployEnv(t *testing.T) *pushCall {
 	saveDefaultToken(t)
 	gitCommitAll(t)
 	stubMetaServer(t, newAppExistsMeta(t).URL)
-	RepoServerURL = newMockRepoServer(t).URL
-	t.Cleanup(func() { RepoServerURL = "" })
+	t.Setenv(EnvRepoServerURL, newMockRepoServer(t).URL)
 	p := &pushCall{}
 	p.install(t)
 	return p
@@ -202,8 +201,7 @@ func TestRunDeploy(t *testing.T) {
 		saveDefaultToken(t)
 		gitCommitAll(t)
 		stubMetaServer(t, newAppExistsMeta(t).URL)
-		RepoServerURL = newMockRepoServer(t).URL
-		t.Cleanup(func() { RepoServerURL = "" })
+		t.Setenv(EnvRepoServerURL, newMockRepoServer(t).URL)
 		p := &pushCall{}
 		p.install(t)
 
@@ -252,8 +250,7 @@ func TestRunDeploy(t *testing.T) {
 		enterAppDir(t, "myapp") // 未 init
 		t.Setenv("HOME", t.TempDir())
 		saveDefaultToken(t)
-		RepoServerURL = noNetRepoServer(t).URL
-		t.Cleanup(func() { RepoServerURL = "" })
+		t.Setenv(EnvRepoServerURL, noNetRepoServer(t).URL)
 		p := &pushCall{}
 		p.install(t)
 
@@ -276,8 +273,7 @@ func TestRunDeploy(t *testing.T) {
 		}
 		t.Setenv("HOME", t.TempDir())
 		saveDefaultToken(t)
-		RepoServerURL = noNetRepoServer(t).URL
-		t.Cleanup(func() { RepoServerURL = "" })
+		t.Setenv(EnvRepoServerURL, noNetRepoServer(t).URL)
 		p := &pushCall{}
 		p.install(t)
 
@@ -299,8 +295,7 @@ func TestRunDeploy(t *testing.T) {
 		saveDefaultToken(t)
 		gitCommitAll(t)
 		writeTestFile(t, "uncommitted.txt", []byte("dirty")) // 提交后再造未跟踪改动
-		RepoServerURL = noNetRepoServer(t).URL
-		t.Cleanup(func() { RepoServerURL = "" })
+		t.Setenv(EnvRepoServerURL, noNetRepoServer(t).URL)
 		p := &pushCall{}
 		p.install(t)
 
@@ -339,8 +334,7 @@ func TestRunDeploy(t *testing.T) {
 		meta := newMockMeta(t, 200, "ok")
 		t.Cleanup(meta.Close)
 		stubMetaServer(t, meta.URL) // data 为空 → GetApp 返回 ErrNotFound
-		RepoServerURL = noNetRepoServer(t).URL
-		t.Cleanup(func() { RepoServerURL = "" })
+		t.Setenv(EnvRepoServerURL, noNetRepoServer(t).URL)
 		p := &pushCall{}
 		p.install(t)
 
@@ -364,8 +358,7 @@ func TestRunDeploy(t *testing.T) {
 		meta := newMockMeta(t, 500, "meta exploded")
 		t.Cleanup(meta.Close)
 		stubMetaServer(t, meta.URL) // 非 not-found 错误 → 不放行，且不当作「不存在」
-		RepoServerURL = noNetRepoServer(t).URL
-		t.Cleanup(func() { RepoServerURL = "" })
+		t.Setenv(EnvRepoServerURL, noNetRepoServer(t).URL)
 		p := &pushCall{}
 		p.install(t)
 
@@ -389,8 +382,7 @@ func TestRunDeploy(t *testing.T) {
 		stubMetaServer(t, newAppExistsMeta(t).URL)
 		srv := newMockMeta(t, 500, "repository could not be prepared")
 		t.Cleanup(srv.Close)
-		RepoServerURL = srv.URL
-		t.Cleanup(func() { RepoServerURL = "" })
+		t.Setenv(EnvRepoServerURL, srv.URL)
 		(&pushCall{}).install(t)
 
 		if err := runDeploy("preview", false, false); err == nil {
@@ -406,8 +398,7 @@ func TestRunDeploy(t *testing.T) {
 		stubMetaServer(t, newAppExistsMeta(t).URL)
 		srv := newMockMeta(t, 200, "ok") // data 为空 → 无 cloneUrl
 		t.Cleanup(srv.Close)
-		RepoServerURL = srv.URL
-		t.Cleanup(func() { RepoServerURL = "" })
+		t.Setenv(EnvRepoServerURL, srv.URL)
 		(&pushCall{}).install(t)
 
 		if err := runDeploy("preview", false, false); err == nil {
@@ -453,8 +444,7 @@ func TestRunDeployProductionConfirm(t *testing.T) {
 		saveDefaultToken(t)
 		gitCommitAll(t)
 		stubMetaServer(t, newAppExistsMeta(t).URL)
-		RepoServerURL = noNetRepoServer(t).URL // 取消必须在触达仓库服务之前短路
-		t.Cleanup(func() { RepoServerURL = "" })
+		t.Setenv(EnvRepoServerURL, noNetRepoServer(t).URL) // 取消必须在触达仓库服务之前短路
 		p := &pushCall{}
 		p.install(t)
 		sentinel := errors.New("aborted")
@@ -509,8 +499,7 @@ func TestRunDeployProductionConfirm(t *testing.T) {
 		saveDefaultToken(t)
 		gitCommitAll(t)
 		stubMetaServer(t, newAppExistsMeta(t).URL)
-		RepoServerURL = noNetRepoServer(t).URL
-		t.Cleanup(func() { RepoServerURL = "" })
+		t.Setenv(EnvRepoServerURL, noNetRepoServer(t).URL)
 		p := &pushCall{}
 		p.install(t)
 		// 不打桩 confirmDeployFunc，走真 confirmProductionDeploy；go test 下 stdin 非 TTY → 拒绝
@@ -791,8 +780,7 @@ func TestDeployStatusFlagShortCircuitsDeploy(t *testing.T) {
 		"commitSha": headSha(t), "status": "SUCCESS", "phase": "DEPLOY",
 	})
 	stubMetaServer(t, srv.URL)
-	RepoServerURL = noNetRepoServer(t).URL // --status 不得触达仓库服务
-	t.Cleanup(func() { RepoServerURL = "" })
+	t.Setenv(EnvRepoServerURL, noNetRepoServer(t).URL) // --status 不得触达仓库服务
 	p := &pushCall{}
 	p.install(t)
 	stubStdoutTerminal(t, true) // 默认 --output auto：钉成终端视角，本测试断言的是 table 渲染

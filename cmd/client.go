@@ -1,10 +1,10 @@
 /**
- * [INPUT]: 依赖 internal/config（Load/LoadConfig/LoadSettings/LookupEnvironment）、internal/api（New/Option/WithDebug/DebugFormat/WithHeaders）、fmt、os、strings；从 root.go 读取全局 Profile / AccessToken / MetaServerURL / RepoServerURL / Environment / DebugMode，从 output.go 读取 resolvedOutput
+ * [INPUT]: 依赖 internal/config（Load/LoadConfig/LoadSettings/LookupEnvironment）、internal/api（New/Option/WithDebug/DebugFormat/WithHeaders）、fmt、os、strings；从 root.go 读取全局 Profile / AccessToken / MetaServerURL / Environment / DebugMode，从 output.go 读取 resolvedOutput
  * [OUTPUT]: 对外提供 newClientFromProfile（变参 ...api.Option）/ newRepoClientFromProfile / debugOption（--debug × --output 合成 api.WithDebug）/ resolveAccessToken / accessTokenSource / metaServerURL / repoServerURL / resolveEnvironment / resolveChannel / envName 函数、withGateway helper、apiGatewayPath / EnvAccessToken / EnvMetaServerURL / EnvRepoServerURL 常量与 tokenSource 常量
  * [POS]: cmd 模块的公共 helper，统一「全局命令行入参 → API 客户端」的构建逻辑——profile / token / server / env / debug 全部由 root PersistentFlag 注入，子命令零参数调用；
  *        newClientFromProfile 收 ...api.Option 变参，把每命令横切选项（如 WithDryRun）追加到基础选项之后，写命令按需注入；
  *        resolveAccessToken 是 token 取值链的唯一入口：--access-token flag > $MAKE_ACCESS_TOKEN > credentials[profile].access_token（resolveProfile / configure verify / whoami 共用，不允许第二条链）；
- *        resolveProfile 收口凭证与配置解析，resolveEnvironment 收口环境 preset；主机地址取值链 metaServerURL / repoServerURL：flag > $MAKE_*_SERVER_URL > profile config > 环境内置地址（configure resolve / verify 同用，不允许手写第二条链），主机基址再经 withGateway 补网关前缀 /api/make
+ *        resolveProfile 收口凭证与配置解析，resolveEnvironment 收口环境 preset；主机地址取值链 metaServerURL：flag > $MAKE_META_SERVER_URL > profile config > 环境内置地址；repoServerURL 同构但无 flag 级（configure resolve / verify 同用，不允许手写第二条链），主机基址再经 withGateway 补网关前缀 /api/make
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -109,8 +109,9 @@ func metaServerURL(cp config.ConfigProfile, env config.Environment) string {
 	return firstNonEmpty(MetaServerURL, os.Getenv(EnvMetaServerURL), cp.MetaServerURL, env.MetaServerURL)
 }
 
+// repoServerURL 无 flag 级：代码仓库主机是部署实现细节，不值得占一个全局 flag；$MAKE_REPO_SERVER_URL 仍留给 CI/测试覆盖
 func repoServerURL(cp config.ConfigProfile, env config.Environment) string {
-	return firstNonEmpty(RepoServerURL, os.Getenv(EnvRepoServerURL), cp.RepoServerURL, env.RepoServerURL)
+	return firstNonEmpty(os.Getenv(EnvRepoServerURL), cp.RepoServerURL, env.RepoServerURL)
 }
 
 // firstNonEmpty 返回第一个非空字符串，统一「flag > env > config > 环境 preset」取值链

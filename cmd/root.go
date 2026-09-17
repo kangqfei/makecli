@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 github.com/spf13/cobra、github.com/spf13/pflag、os、strings、internal/config（EnvironmentNames/DefaultEnvironment）、internal/notifier
- * [OUTPUT]: 对外提供 Execute 函数、rootCmd 根命令、全局变量 Profile / AccessToken / MetaServerURL / RepoServerURL / Environment / DebugMode；包内 commandName 解析器（Execute 前解析顶级命令名喂给 notifier.Start）、installUsageTemplate（usageTemplate + 模板函数装配，根 help 尾附 skills 安装引导）
- * [POS]: cmd 模块的入口，挂载 version / configure / login / whoami / app / entity / relation / record / apply / diff / update / skills / schema / integration / preflight 子命令；定义全局 --profile / --access-token / --meta-server-url / --repo-server-url / --env / --debug PersistentFlag；后端 URL 兜底交给 config.Environment preset；错误呈现经 reportExecuteError 单一出口（SilenceErrors，见 errors.go）
+ * [OUTPUT]: 对外提供 Execute 函数、rootCmd 根命令、全局变量 Profile / AccessToken / MetaServerURL / Environment / DebugMode；包内 commandName 解析器（Execute 前解析顶级命令名喂给 notifier.Start）、installUsageTemplate（usageTemplate + 模板函数装配，根 help 尾附 skills 安装引导）
+ * [POS]: cmd 模块的入口，挂载 version / configure / login / whoami / app / entity / relation / record / apply / diff / update / skills / schema / integration / preflight 子命令；定义全局 --profile / --access-token / --meta-server-url / --env / --debug PersistentFlag；后端 URL 兜底交给 config.Environment preset；错误呈现经 reportExecuteError 单一出口（SilenceErrors，见 errors.go）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -22,9 +22,6 @@ var DebugMode bool
 
 // MetaServerURL Meta Server 基础 URL，从命令行读取。空串 = 回退 $MAKE_META_SERVER_URL > profile config > 环境内置地址（client.go metaServerURL）
 var MetaServerURL string
-
-// RepoServerURL 代码仓库服务（make-repo）基础 URL，从命令行读取。空串 = 回退 $MAKE_REPO_SERVER_URL > profile config > 环境内置地址（client.go repoServerURL）
-var RepoServerURL string
 
 // Profile 全局凭证 profile 名称，从命令行读取（--profile）。
 // 默认值与 PersistentFlag 注册一致，确保未经过 cobra 解析时（如单元测试）也可用。
@@ -109,7 +106,6 @@ func Execute(version, buildDate string) error {
 	rootCmd.PersistentFlags().BoolVar(&DebugMode, "debug", false, "enable debug mode: dump each HTTP request/response to stderr (curl-style text, or JSON when --output is json)")
 	_ = rootCmd.PersistentFlags().MarkHidden("debug")
 	rootCmd.PersistentFlags().StringVar(&MetaServerURL, "meta-server-url", "", "Meta Server base URL (overrides $"+EnvMetaServerURL+" and the profile config)")
-	rootCmd.PersistentFlags().StringVar(&RepoServerURL, "repo-server-url", "", "Code Repository Server base URL (overrides $"+EnvRepoServerURL+" and the profile config)")
 	rootCmd.PersistentFlags().StringVar(&Profile, "profile", "default", "credentials profile to use")
 	rootCmd.PersistentFlags().StringVarP(&AccessToken, "access-token", "t", "", "access token (overrides $"+EnvAccessToken+" and the profile credentials)")
 	rootCmd.PersistentFlags().StringVar(&Environment, "env", "", "backend environment "+strings.Join(config.EnvironmentNames(), "|")+" (overrides [settings] environment, default "+config.DefaultEnvironment+")")

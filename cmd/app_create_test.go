@@ -542,9 +542,7 @@ func newMockMeta(t *testing.T, code int, message string) *httptest.Server {
 // stubRepoServer 测试期间把代码仓库服务指向给定 URL，结束自动还原
 func stubRepoServer(t *testing.T, url string) {
 	t.Helper()
-	old := RepoServerURL
-	RepoServerURL = url
-	t.Cleanup(func() { RepoServerURL = old })
+	t.Setenv(EnvRepoServerURL, url)
 }
 
 // saveDefaultToken 在当前 HOME 下写入 default profile 的测试 JWT
