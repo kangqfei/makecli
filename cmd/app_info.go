@@ -83,6 +83,7 @@ func deploymentRow(env string, d *api.EnvDeployment) []string {
 func renderAppInfo(app *api.App, overview *api.DeploymentOverview) {
 	version, _ := app.Meta["version"].(string)
 	createdAt, _ := app.Meta["createdAt"].(string)
+	pairAppKey, _ := app.Meta["pairAppKey"].(string)
 	description, _ := app.Properties["description"].(string)
 
 	fmt.Printf("%-13s %s\n", "Key:", app.Key)
@@ -90,6 +91,7 @@ func renderAppInfo(app *api.App, overview *api.DeploymentOverview) {
 	fmt.Printf("%-13s %s\n", "Description:", description)
 	fmt.Printf("%-13s %s\n", "Version:", version)
 	fmt.Printf("%-13s %s\n", "Created At:", createdAt)
+	fmt.Printf("%-13s %s\n", "Pair App Key:", pairAppKey)
 	fmt.Println()
 
 	var preview, production *api.EnvDeployment

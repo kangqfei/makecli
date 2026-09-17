@@ -21,7 +21,7 @@ func appInfoMetaBody() map[string]any {
 		"code": 200, "msg": "success",
 		"data": map[string]any{
 			"key": "apptest_001", "name": "测试应用", "type": "Make.App",
-			"meta":       map[string]any{"version": "1.0.0", "createdAt": "2026-01-01T10:00:00Z"},
+			"meta":       map[string]any{"version": "1.0.0", "createdAt": "2026-01-01T10:00:00Z", "pairAppKey": "apptest_001_beta_"},
 			"properties": map[string]any{"description": "demo app"},
 		},
 	}
@@ -78,6 +78,7 @@ func TestRunAppInfo(t *testing.T) {
 
 		for _, want := range []string{
 			"Key:", "apptest_001", "测试应用", "demo app", "1.0.0", "2026-01-01T10:00:00Z",
+			"Pair App Key:", "apptest_001_beta_",
 			"ENVIRONMENT", "preview", "production", "Ready", "9b05c7d",
 			"https://apptest-001-preview-90.dev-make.qtech.cn",
 			"https://apptest-001-prod-90.dev-make.qtech.cn",
