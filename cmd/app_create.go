@@ -1,12 +1,12 @@
 /**
- * [INPUT]: 依赖 cmd/client（newClientFromProfile/newRepoClientFromProfile）、cmd/app（loadAppManifestFromFile、validResourceKey、defaultName）、cmd/apply（ResourceManifest）、cmd/git（initGitRepo/ensureGitignore/stageAndCommit）、agents（embed 模板）、internal/api（WithDryRun）、bytes、fmt、os、path/filepath、github.com/go-git/go-git/v5、gopkg.in/yaml.v3、github.com/spf13/cobra
+ * [INPUT]: 依赖 cmd/client（newClientFromProfile）、cmd/app（loadAppManifestFromFile、validResourceKey、defaultName）、cmd/apply（ResourceManifest）、cmd/git（initGitRepo/ensureGitignore/stageAndCommit）、agents（embed 模板）、internal/api（WithDryRun）、bytes、fmt、os、path/filepath、github.com/go-git/go-git/v5、gopkg.in/yaml.v3、github.com/spf13/cobra
  * [OUTPUT]: 对外提供 newAppCreateCmd 函数；包内 runAppCreate / writeScaffold / scaffoldOutputs / fileExists / scaffoldGit / renderAppDSL / newAppManifest / deriveAppKey（writeScaffold/scaffoldOutputs/deriveAppKey/newAppManifest 被 app_init 复用）
  * [POS]: cmd/app 的 create 子命令——= app init 本地脚手架内核 + 远端 App 注册 + initial commit + 代码仓库。
  *        位置参数 <appKey> 同时是「目录名 + key」（filepath.Base(filepath.Abs(arg)) 推导，`.`/`..` 隐藏便利），
  *        validResourceKey 把关；写 CLAUDE.md/AGENTS.md（embed 模板，scaffoldFile 映射 embed→out 名）+ apps/dsl/app.yaml（ResourceManifest 序列化，与 apply/diff 同结构往返）；
- *        执行序「远端先行」：加载凭证→CreateApp→writeScaffold(幂等 skip-if-exists)→scaffoldGit(init+.gitignore+initial commit)→prepareCodeRepos，新目录远端失败时本地零残留、重跑干净；
+ *        执行序「远端先行」：加载凭证→CreateApp→writeScaffold(幂等 skip-if-exists)→scaffoldGit(init+.gitignore+initial commit)，新目录远端失败时本地零残留、重跑干净；代码仓库不在此阶段准备（服务端要求先建 Beta 环境，由 deploy 幂等准备）；
  *        writeScaffold 幂等故 create 可与 init 组合（先 init 本地、再 create 补远端，不再硬拒已存在文件）；scaffoldGit 复用 init 内核再加 initial commit→create 产物即干净可 deploy；git 失败降级 stderr 警告（不阻断已成功的远端创建）；
- *        prepareCodeRepos 成功静默（仅 deploy 关心仓库地址），失败降级为 stderr 警告；-f 文件模式仅建远端不脚手架；
+ *        -f 文件模式仅建远端不脚手架；
  *        --dry-run 经 api.WithDryRun 注入 X-Dry-Run 头让远端校验但不落库，校验通过后立即收尾（跳过脚手架/git/仓库准备这些真实副作用），脚手架与文件两模式同款短路
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -97,7 +97,7 @@ func runAppCreate(folder, displayName, description string, dryRun bool) error {
 		return apiErr
 	}
 
-	// dry-run 在远端校验通过后立即收尾：脚手架 / git init / 仓库准备都是真实副作用，
+	// dry-run 在远端校验通过后立即收尾：脚手架 / git init 都是真实副作用，
 	// 而 dry-run 只回答「这次创建会不会成功」，故一律跳过，不在本地留任何痕迹。
 	if dryRun {
 		fmt.Printf("Dry run: app '%s' would be created successfully (no changes made)\n", appKey)
@@ -111,13 +111,12 @@ func runAppCreate(folder, displayName, description string, dryRun bool) error {
 	scaffoldGit(folder, appKey)
 
 	fmt.Printf("App '%s' created successfully\n", appKey)
-	prepareCodeRepos(appKey)
 	return nil
 }
 
 // scaffoldGit 把脚手架目录变成可立即部署的 git 仓库：init（幂等）+ .gitignore + 一次 initial commit。
 // 与 app init 共享内核（initGitRepo / ensureGitignore），但额外做 commit——使 create 产物即干净、可直接 deploy。
-// 失败仅降级为 stderr 警告（同 prepareCodeRepos 档）：远端 App 与本地脚手架均已就绪，
+// 失败仅降级为 stderr 警告：远端 App 与本地脚手架均已就绪，
 // git 没起来属可单独补救（重跑 `makecli app init` + 手动 commit），不该让已成功的 create 报全败。
 // 全程不写 stdout——保持成功输出仅 `App 'X' created successfully` 一行。
 func scaffoldGit(folder, appKey string) {
@@ -276,22 +275,5 @@ func runAppCreateFromFile(path string, dryRun bool) error {
 	}
 
 	fmt.Printf("App '%s' created successfully\n", manifest.Key)
-	prepareCodeRepos(manifest.Key)
 	return nil
-}
-
-// ---------------------------------- 代码仓库准备 ----------------------------------
-
-// prepareCodeRepos 在 App 创建成功后幂等准备 preview/production 代码仓库。
-// 成功静默——仓库地址只在 deploy 时才有意义，create 成功只打印一行 created。
-// 失败仅降级为 stderr 警告：deploy 走同一个幂等接口会自动重试，不该把已成功的
-// App 创建报成失败，但准备失败属于值得告知的错误信息，故仍输出到 stderr。
-func prepareCodeRepos(appKey string) {
-	client, _, err := newRepoClientFromProfile()
-	if err == nil {
-		if _, err = client.CreateRepository(appKey); err == nil {
-			return
-		}
-	}
-	fmt.Fprintf(os.Stderr, "warning: code repositories not ready: %v (deploy will retry automatically)\n", err)
 }

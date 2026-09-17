@@ -239,8 +239,8 @@ func TestRunAppCreate(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
 		saveDefaultToken(t)
 		MetaServerURL = srv.URL
-		// 即便仓库服务可用，成功时也不打印仓库信息（仅 deploy 关心仓库地址）
-		stubRepoServer(t, newMockRepoServer(t).URL)
+		// 仓库服务指向不可用地址——create 不再预热代码仓库（服务端要求先建 Beta 环境，由 deploy 幂等准备），根本不该触达
+		stubRepoServer(t, "http://127.0.0.1:0")
 
 		folder := filepath.Join(t.TempDir(), "myapp")
 		out := captureStdout(t, func() {
@@ -253,29 +253,6 @@ func TestRunAppCreate(t *testing.T) {
 		}
 		if strings.TrimSpace(out) != "App 'myapp' created successfully" {
 			t.Errorf("success output not concise, got:\n%s", out)
-		}
-	})
-
-	t.Run("warns on stderr but succeeds when repo prep fails", func(t *testing.T) {
-		srv := newMockMeta(t, 200, "create app success")
-		defer srv.Close()
-		repoSrv := newMockMeta(t, 500, "repository could not be prepared")
-		defer repoSrv.Close()
-		t.Setenv("HOME", t.TempDir())
-		saveDefaultToken(t)
-		MetaServerURL = srv.URL
-		stubRepoServer(t, repoSrv.URL)
-
-		folder := filepath.Join(t.TempDir(), "myapp")
-		var runErr error
-		errOut := captureStderr(t, func() {
-			runErr = runAppCreate(folder, "", "", false)
-		})
-		if runErr != nil {
-			t.Fatalf("repo failure should not fail app create: %v", runErr)
-		}
-		if !strings.Contains(errOut, "code repositories not ready") {
-			t.Errorf("expected repo-prep warning on stderr, got:\n%s", errOut)
 		}
 	})
 
