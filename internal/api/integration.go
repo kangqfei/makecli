@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 bytes、encoding/json、fmt、io、mime/multipart、net/http、net/url、os、path/filepath、strconv，依赖 internal/trace 的 TraceID/Traceparent
+ * [INPUT]: 依赖 bytes、encoding/json、fmt、io、mime/multipart、net/http、net/url、path/filepath、strconv，依赖 debug.go 的 debugSink / debugRequest，依赖 internal/trace 的 TraceID/Traceparent
  * [OUTPUT]: 对外提供 OCROptions 类型、Client.OCR(filename, reader, opts) 方法，返回 OCR 服务 data 字段（map[string]any，已递归剥除 position 坐标字段）
  * [POS]: internal/api 的 integration 子层，封装 Make Integration 服务（/integration/v1/ocr）的 HTTP 调用，与 client.go (Meta/Data) 平级
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -15,7 +15,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strconv"
 
@@ -114,36 +113,33 @@ func (c *Client) OCR(filename string, content io.Reader, opts OCROptions) (map[s
 	// trace 头：与 do() 同源，trace-id 全程稳定，parent-id 每请求新生成
 	traceparent, logID := trace.Traceparent(), trace.TraceID()
 
-	if c.debug {
-		fmt.Fprintf(os.Stderr, "\n=== DEBUG: HTTP Request ===\n")
-		fmt.Fprintf(os.Stderr, "curl -X POST '%s' \\\n", endpoint)
-		fmt.Fprintf(os.Stderr, "  -H 'Content-Type: %s' \\\n", contentType)
-		fmt.Fprintf(os.Stderr, "  -H 'Authorization: Bearer %s' \\\n", c.token)
-		fmt.Fprintf(os.Stderr, "  -H 'Traceparent: %s' \\\n", traceparent)
-		fmt.Fprintf(os.Stderr, "  -H 'X-Log-Id: %s' \\\n", logID)
-		for k, v := range c.headers {
-			fmt.Fprintf(os.Stderr, "  -H '%s: %s' \\\n", k, v)
-		}
-		fmt.Fprintf(os.Stderr, "  -F 'file=@%s'", filename)
-		if opts.BusinessID > 0 {
-			fmt.Fprintf(os.Stderr, " -F 'business_id=%d'", opts.BusinessID)
-		}
-		if opts.VerifyVAT != nil {
-			fmt.Fprintf(os.Stderr, " -F 'verify_vat=%t'", *opts.VerifyVAT)
-		}
-		fmt.Fprintf(os.Stderr, "\n==========================\n\n")
+	// 请求头有序收集：一份数据同时喂 http.Request 与 --debug 转储
+	headers := [][2]string{
+		{"Content-Type", contentType},
+		{"Authorization", "Bearer " + c.token},
+		{"Traceparent", traceparent},
+		{"X-Log-Id", logID},
+	}
+	for k, v := range c.headers {
+		headers = append(headers, [2]string{k, v})
 	}
 
 	req, err := http.NewRequest(http.MethodPost, endpoint, &buf)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Traceparent", traceparent)
-	req.Header.Set("X-Log-Id", logID)
-	for k, v := range c.headers {
-		req.Header.Set(k, v)
+	for _, h := range headers {
+		req.Header.Set(h[0], h[1])
+	}
+	if c.debug != nil {
+		form := [][2]string{{"file", "@" + filename}}
+		if opts.BusinessID > 0 {
+			form = append(form, [2]string{"business_id", strconv.FormatInt(opts.BusinessID, 10)})
+		}
+		if opts.VerifyVAT != nil {
+			form = append(form, [2]string{"verify_vat", strconv.FormatBool(*opts.VerifyVAT)})
+		}
+		c.debug.request(debugRequest{Method: http.MethodPost, URL: endpoint, Headers: headers, Form: form})
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -152,13 +148,21 @@ func (c *Client) OCR(filename string, content io.Reader, opts OCROptions) (map[s
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取响应失败: %w", err)
+	}
+	if c.debug != nil {
+		c.debug.response(resp, raw)
+	}
+
 	var result struct {
 		Code      int            `json:"code"`
 		Message   string         `json:"msg"`
 		RequestID string         `json:"request_id"`
 		Data      map[string]any `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, fmt.Errorf("无效的响应格式: %w", err)
 	}
 	if result.Code == authFailedCode {

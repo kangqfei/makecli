@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 internal/config（Load/LoadConfig/LoadSettings/LookupEnvironment）、internal/api（New/Option/WithDebug/WithHeaders）、fmt、os、strings；从 root.go 读取全局 Profile / AccessToken / MetaServerURL / RepoServerURL / Environment / DebugMode
- * [OUTPUT]: 对外提供 newClientFromProfile（变参 ...api.Option）/ newRepoClientFromProfile / resolveAccessToken / accessTokenSource / metaServerURL / repoServerURL / resolveEnvironment / resolveChannel / envName 函数、withGateway helper、apiGatewayPath / EnvAccessToken / EnvMetaServerURL / EnvRepoServerURL 常量与 tokenSource 常量
+ * [INPUT]: 依赖 internal/config（Load/LoadConfig/LoadSettings/LookupEnvironment）、internal/api（New/Option/WithDebug/DebugFormat/WithHeaders）、fmt、os、strings；从 root.go 读取全局 Profile / AccessToken / MetaServerURL / RepoServerURL / Environment / DebugMode，从 output.go 读取 resolvedOutput
+ * [OUTPUT]: 对外提供 newClientFromProfile（变参 ...api.Option）/ newRepoClientFromProfile / debugOption（--debug × --output 合成 api.WithDebug）/ resolveAccessToken / accessTokenSource / metaServerURL / repoServerURL / resolveEnvironment / resolveChannel / envName 函数、withGateway helper、apiGatewayPath / EnvAccessToken / EnvMetaServerURL / EnvRepoServerURL 常量与 tokenSource 常量
  * [POS]: cmd 模块的公共 helper，统一「全局命令行入参 → API 客户端」的构建逻辑——profile / token / server / env / debug 全部由 root PersistentFlag 注入，子命令零参数调用；
  *        newClientFromProfile 收 ...api.Option 变参，把每命令横切选项（如 WithDryRun）追加到基础选项之后，写命令按需注入；
  *        resolveAccessToken 是 token 取值链的唯一入口：--access-token flag > $MAKE_ACCESS_TOKEN > credentials[profile].access_token（resolveProfile / configure verify / whoami 共用，不允许第二条链）；
@@ -201,8 +201,18 @@ func newClientFromProfile(extra ...api.Option) (*api.Client, error) {
 		return nil, err
 	}
 	server := withGateway(metaServerURL(cp, env))
-	opts := append([]api.Option{api.WithDebug(DebugMode), api.WithHeaders(headers)}, extra...)
+	opts := append([]api.Option{debugOption(), api.WithHeaders(headers)}, extra...)
 	return api.New(server, token, opts...), nil
+}
+
+// debugOption 把全局 --debug 与被调命令的 --output 合成 api 的调试选项：
+// 输出走 JSON（显式 --output json，或 auto 落到管道/agent）时调试转储也用 JSON，人在终端看 curl -v 文本
+func debugOption() api.Option {
+	format := api.DebugText
+	if resolvedOutput == outputJSON {
+		format = api.DebugJSON
+	}
+	return api.WithDebug(DebugMode, format)
 }
 
 // newRepoClientFromProfile 构建指向代码仓库服务（make-repo）的 API 客户端。
@@ -217,5 +227,5 @@ func newRepoClientFromProfile() (*api.Client, string, error) {
 		return nil, "", err
 	}
 	server := withGateway(repoServerURL(cp, env))
-	return api.New(server, token, api.WithDebug(DebugMode), api.WithHeaders(headers)), token, nil
+	return api.New(server, token, debugOption(), api.WithHeaders(headers)), token, nil
 }

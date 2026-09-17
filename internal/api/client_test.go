@@ -252,7 +252,7 @@ func TestWithDebugOption(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New(srv.URL, "test-token", WithDebug(true))
+	client := New(srv.URL, "test-token", WithDebug(true, DebugText))
 	if err := client.CreateApp("test", "测试", nil); err != nil {
 		t.Fatalf("CreateApp with debug: %v", err)
 	}

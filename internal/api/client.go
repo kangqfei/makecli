@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 bytes、encoding/json、errors、fmt、net/http、os、strings、time，依赖 internal/trace 的 TraceID/Traceparent
- * [OUTPUT]: 对外提供 Client 类型、ErrNotFound / ErrAuthFailed 哨兵错误、UniqueConstraintError 类型化错误（409 唯一性冲突，errors.As 判定）、Option / WithDebug / WithHeaders / WithDryRun 功能选项、New 构造函数、App / Field / Entity / EntityProperties / UniqueConstraint / RelationEnd / RelationProperties / Relation / Schema 类型、CreateApp(key, name, properties) / ListApps(page, size, filter) / DeleteApp(key) / GetApp(key) / CreateEntity(key, name, appKey, props) / ListEntities(appKey, page, size, filter) / GetEntity(appKey, key) / UpdateEntity(key, name, appKey, props) / DeleteEntity / CreateRelation(key, name, appKey, props) / UpdateRelation / ListRelations(appKey, ...) / GetRelation(appKey, key) / DeleteRelation / GetSchema(appKey) 方法。资源以 Key 为唯一标识符（英数下划线），Name 为用户可见展示名（支持中文）。Get* 方法在资源确实不存在时返回 ErrNotFound（可用 errors.Is 判定），其余错误（传输/非 not-found 业务码/解码）原样返回
+ * [INPUT]: 依赖 bytes、encoding/json、errors、fmt、io、net/http、strings、time，依赖 debug.go 的 debugSink，依赖 internal/trace 的 TraceID/Traceparent
+ * [OUTPUT]: 对外提供 Client 类型、ErrNotFound / ErrAuthFailed 哨兵错误、UniqueConstraintError 类型化错误（409 唯一性冲突，errors.As 判定）、Option / WithDebug(on, DebugFormat) / WithHeaders / WithDryRun 功能选项、New 构造函数、App / Field / Entity / EntityProperties / UniqueConstraint / RelationEnd / RelationProperties / Relation / Schema 类型、CreateApp(key, name, properties) / ListApps(page, size, filter) / DeleteApp(key) / GetApp(key) / CreateEntity(key, name, appKey, props) / ListEntities(appKey, page, size, filter) / GetEntity(appKey, key) / UpdateEntity(key, name, appKey, props) / DeleteEntity / CreateRelation(key, name, appKey, props) / UpdateRelation / ListRelations(appKey, ...) / GetRelation(appKey, key) / DeleteRelation / GetSchema(appKey) 方法。资源以 Key 为唯一标识符（英数下划线），Name 为用户可见展示名（支持中文）。Get* 方法在资源确实不存在时返回 ErrNotFound（可用 errors.Is 判定），其余错误（传输/非 not-found 业务码/解码）原样返回
  * [POS]: internal/api 的核心，封装 Make Meta Service 的 HTTP 调用
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -97,7 +96,7 @@ type Client struct {
 	baseURL    string
 	token      string
 	httpClient *http.Client
-	debug      bool
+	debug      *debugSink // nil 即关闭
 	dryRun     bool
 	headers    map[string]string
 }
@@ -105,9 +104,14 @@ type Client struct {
 // Option 是 Client 的功能选项
 type Option func(*Client)
 
-// WithDebug 启用 debug 模式，输出 curl 命令到 stderr
-func WithDebug(on bool) Option {
-	return func(c *Client) { c.debug = on }
+// WithDebug 启用 debug 模式，把每个请求与响应转储到 stderr；format 选文本（curl -v 风格）或 JSON（渲染见 debug.go）
+func WithDebug(on bool, format DebugFormat) Option {
+	return func(c *Client) {
+		c.debug = nil
+		if on {
+			c.debug = newDebugSink(format)
+		}
+	}
 }
 
 // WithHeaders 设置额外请求头（如 X-Tenant-ID、X-Operator-ID）
@@ -521,29 +525,22 @@ func (c *Client) request(method, target, path string, body, result any) error {
 	// trace 头：trace-id 全程稳定（X-Log-Id 与 traceparent 第二段一致），parent-id 每请求新生成
 	traceparent, logID := trace.Traceparent(), trace.TraceID()
 
-	// debug 模式：输出 curl 命令（各段先收集再 join，免无 body 时行尾悬空反斜杠）
-	if c.debug {
-		parts := []string{fmt.Sprintf("curl -X %s '%s%s'", method, c.baseURL, path)}
-		if body != nil {
-			parts = append(parts, "-H 'Content-Type: application/json'")
-		}
-		parts = append(parts,
-			fmt.Sprintf("-H 'Authorization: Bearer %s'", c.token),
-			fmt.Sprintf("-H 'X-Make-Target: %s'", target),
-			fmt.Sprintf("-H 'Traceparent: %s'", traceparent),
-			fmt.Sprintf("-H 'X-Log-Id: %s'", logID),
-		)
-		if c.dryRun {
-			parts = append(parts, "-H 'X-Dry-Run: true'")
-		}
-		for k, v := range c.headers {
-			parts = append(parts, fmt.Sprintf("-H '%s: %s'", k, v))
-		}
-		if body != nil {
-			parts = append(parts, fmt.Sprintf("-d '%s'", string(data)))
-		}
-		fmt.Fprintf(os.Stderr, "\n=== DEBUG: HTTP Request ===\n%s\n==========================\n\n",
-			strings.Join(parts, " \\\n  "))
+	// 请求头有序收集：一份数据同时喂 http.Request 与 --debug 转储，杜绝两处漂移
+	headers := [][2]string{}
+	if body != nil {
+		headers = append(headers, [2]string{"Content-Type", "application/json"})
+	}
+	headers = append(headers,
+		[2]string{"Authorization", "Bearer " + c.token},
+		[2]string{"X-Make-Target", target},
+		[2]string{"Traceparent", traceparent},
+		[2]string{"X-Log-Id", logID},
+	)
+	if c.dryRun {
+		headers = append(headers, [2]string{"X-Dry-Run", "true"})
+	}
+	for k, v := range c.headers {
+		headers = append(headers, [2]string{k, v})
 	}
 
 	var payload io.Reader
@@ -554,18 +551,11 @@ func (c *Client) request(method, target, path string, body, result any) error {
 	if err != nil {
 		return err
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	for _, h := range headers {
+		req.Header.Set(h[0], h[1])
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("X-Make-Target", target)
-	req.Header.Set("Traceparent", traceparent)
-	req.Header.Set("X-Log-Id", logID)
-	if c.dryRun {
-		req.Header.Set("X-Dry-Run", "true")
-	}
-	for k, v := range c.headers {
-		req.Header.Set(k, v)
+	if c.debug != nil {
+		c.debug.request(debugRequest{Method: method, URL: c.baseURL + path, Headers: headers, Body: data})
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -577,6 +567,9 @@ func (c *Client) request(method, target, path string, body, result any) error {
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("读取响应失败: %w", err)
+	}
+	if c.debug != nil {
+		c.debug.response(resp, raw)
 	}
 	// 鉴权失败是横切错误：轻量探针先读 code，命中鉴权码即抛 ErrAuthFailed 哨兵，
 	// 让 cmd 层统一翻译成 `makecli login` 引导，无需各方法各自识别。

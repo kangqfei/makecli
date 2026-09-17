@@ -146,3 +146,38 @@ func TestAttachNotice(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveInvokedOutput(t *testing.T) {
+	orig := stdoutIsTerminal
+	t.Cleanup(func() { stdoutIsTerminal = orig })
+
+	t.Run("显式 --output json", func(t *testing.T) {
+		stdoutIsTerminal = func() bool { return true }
+		cmd := &cobra.Command{}
+		var out string
+		addOutputFlag(cmd, &out)
+		_ = cmd.Flags().Set("output", outputJSON)
+		resolveInvokedOutput(cmd)
+		if resolvedOutput != outputJSON {
+			t.Errorf("resolvedOutput = %q, want json", resolvedOutput)
+		}
+	})
+	t.Run("无 --output 旗标按 auto：管道落 json", func(t *testing.T) {
+		stdoutIsTerminal = func() bool { return false }
+		resolveInvokedOutput(&cobra.Command{})
+		if resolvedOutput != outputJSON {
+			t.Errorf("resolvedOutput = %q, want json", resolvedOutput)
+		}
+	})
+	t.Run("非法值退回 auto 而不炸", func(t *testing.T) {
+		stdoutIsTerminal = func() bool { return true }
+		cmd := &cobra.Command{}
+		var out string
+		addOutputFlag(cmd, &out)
+		_ = cmd.Flags().Set("output", "yaml")
+		resolveInvokedOutput(cmd)
+		if resolvedOutput != outputTable {
+			t.Errorf("resolvedOutput = %q, want table", resolvedOutput)
+		}
+	})
+}

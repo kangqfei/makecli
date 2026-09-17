@@ -41,6 +41,8 @@ var Environment string
 var rootCmd = &cobra.Command{
 	Use:   "makecli",
 	Short: "makecli — agentic development platform cli",
+	// 任何子命令执行前先落定本次调用的输出格式，--debug 转储形态据此选文本/JSON
+	PersistentPreRun: func(cmd *cobra.Command, _ []string) { resolveInvokedOutput(cmd) },
 }
 
 // usageTemplate 对齐 GitHub CLI 风格：段落标题全大写；根命令尾部附 skills 一次性安装引导（对齐 lark-cli，仅根级）
@@ -98,10 +100,13 @@ func Execute(version, buildDate string) error {
 	rootCmd.Version = formatVersion(version, buildDate)
 	rootCmd.SetVersionTemplate(`{{.Version}}`)
 	installUsageTemplate(rootCmd)
+	// 子命令自己的 PersistentPreRunE（configure/entity/record/relation）默认会遮蔽 root 的钩子，
+	// 开启遍历让 root 的输出格式落定对全部命令生效
+	cobra.EnableTraverseRunHooks = true
 	// 错误呈现收口到 Execute 出口的 reportExecuteError 单一出口：
 	// 抑制 cobra 自动打印，让鉴权失败能升级为引导、退出码哨兵能保持静默。
 	rootCmd.SilenceErrors = true
-	rootCmd.PersistentFlags().BoolVar(&DebugMode, "debug", false, "enable debug mode to show curl output")
+	rootCmd.PersistentFlags().BoolVar(&DebugMode, "debug", false, "enable debug mode: dump each HTTP request/response to stderr (curl-style text, or JSON when --output is json)")
 	_ = rootCmd.PersistentFlags().MarkHidden("debug")
 	rootCmd.PersistentFlags().StringVar(&MetaServerURL, "meta-server-url", "", "Meta Server base URL (overrides $"+EnvMetaServerURL+" and the profile config)")
 	rootCmd.PersistentFlags().StringVar(&RepoServerURL, "repo-server-url", "", "Code Repository Server base URL (overrides $"+EnvRepoServerURL+" and the profile config)")
