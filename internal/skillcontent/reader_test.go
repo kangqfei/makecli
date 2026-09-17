@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 bytes、strings、testing、testing/fstest
- * [OUTPUT]: 覆盖 Read（主文件缺省/子文件/目录列举/未知 skill/未找到/逃逸拒绝）、Names，以及真实嵌入 FS 的冒烟
- * [POS]: skillcontent 模块测试；fstest.MapFS 隔离内容，TestEmbeddedFS 钉住 embed 通路真的接上了 submodule
+ * [OUTPUT]: 覆盖 Read（主文件缺省/子文件/目录列举/未知 skill/未找到/逃逸拒绝）、Names
+ * [POS]: skillcontent 模块测试；fstest.MapFS 隔离内容（真实嵌入 FS 的冒烟在根包 embed_test.go）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -82,20 +82,3 @@ func TestReadNotFoundListsTopLevel(t *testing.T) {
 }
 
 // 冒烟：embed 通路真的接上了 submodule——makeui 在，主文件带 frontmatter，references 非空。
-func TestEmbeddedFS(t *testing.T) {
-	names := Names(FS)
-	if len(names) == 0 {
-		t.Fatal("embedded FS has no skills; run `make sync`")
-	}
-	res, err := Read(FS, "makeui")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.HasPrefix(res.Content, []byte("---\n")) {
-		t.Fatalf("makeui SKILL.md lacks frontmatter: %q", res.Content[:min(len(res.Content), 40)])
-	}
-	refs, err := Read(FS, "makeui/references")
-	if err != nil || len(refs.Entries) == 0 {
-		t.Fatalf("makeui/references: entries=%v err=%v", refs.Entries, err)
-	}
-}

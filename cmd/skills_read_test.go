@@ -18,12 +18,12 @@ import (
 
 func stubSkillContent(t *testing.T) {
 	t.Helper()
-	orig := skillContentFS
-	skillContentFS = fstest.MapFS{
+	orig := SkillContentFS
+	SkillContentFS = fstest.MapFS{
 		"makeui/SKILL.md":                 {Data: []byte("---\nname: makeui\n---\n# makeui\n")},
 		"makeui/references/principles.md": {Data: []byte("# Principles\n")},
 	}
-	t.Cleanup(func() { skillContentFS = orig })
+	t.Cleanup(func() { SkillContentFS = orig })
 }
 
 // execSkillsRead 以真实 cobra 路径执行 `skills read <args>`，返回 stdout / stderr / err。

@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0   # GoReleaser 需要完整 git 历史生成 changelog
-          submodules: true # internal/skillcontent 的 skills submodule 经 go:embed 参与编译
+          submodules: true # 根目录 skills/ submodule 经 embed.go 的 go:embed 参与编译
 
       - uses: actions/setup-go@v6
         with:
