@@ -1,18 +1,30 @@
 /**
- * [INPUT]: 依赖 client.go 的 Client.do / notFoundCode / ErrNotFound、fmt
+ * [INPUT]: 依赖 client.go 的 Client.do / notFoundCode / ErrNotFound、fmt、net/url，依赖 internal/build 的 Version
  * [OUTPUT]: 对外提供 CodeRepo / CodeRepoEnv / CodeRepoMeta / CodeRepoProperties / CodeRepoResource 类型、
  *           Client.CreateRepository(appKey) 方法、CodeRepoResource.CloneURLFor(env) 收口方法
- * [POS]: internal/api 的代码仓库服务（make-repo）调用层，POST /code/v1/repository，
- *        经 X-Make-Target 区分动作；与 client.go 的 Meta 操作共用 Client 与 do 原语
+ * [POS]: internal/api 的代码仓库服务（make-repo）调用层，POST /code/v1/repository?version=<cli 版本>，
+ *        经 X-Make-Target 区分动作；与 client.go 的 Meta 操作共用 Client 与 do 原语。
+ *        version 查询参数是服务端强制升级门禁的依据（缺失即拒绝并提示 makecli update）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
 package api
 
-import "fmt"
+import (
+	"fmt"
+	"net/url"
+
+	"github.com/qfeius/makecli/internal/build"
+)
 
 // codeRepoType 是代码仓库资源的固定 type 标识
 const codeRepoType = "Make.Code.Repository"
+
+// codeRepoPath 是代码仓库端点，version 查询参数带上 CLI 版本供服务端做升级门禁：
+// 服务端按 version 缺失（后续按具体版本）拒绝请求并提示 makecli update
+func codeRepoPath() string {
+	return "/code/v1/repository?version=" + url.QueryEscape(build.Version)
+}
 
 // CodeRepo 描述单个远端仓库（repoName / cloneUrl；MakeRepoID 映射服务端 giteaRepoId 字段——
 // json tag 是线上契约不可改，Go 字段名去耦底层实现）。
@@ -74,6 +86,7 @@ func (r *CodeRepoResource) CloneURLFor(env string) string {
 
 // CreateRepository 调用 MakeService.CreateResource 按租户幂等准备代码仓库：
 // Organization / Repository 不存在则创建，存在则复用。成功即代表仓库已就绪，可以 git push。
+// 请求携带 version 查询参数（CLI 版本），服务端据此做强制升级判定。
 func (c *Client) CreateRepository(appKey string) (*CodeRepoResource, error) {
 	body := map[string]any{
 		"type":   codeRepoType,
@@ -84,7 +97,7 @@ func (c *Client) CreateRepository(appKey string) (*CodeRepoResource, error) {
 		Message string           `json:"msg"`
 		Data    CodeRepoResource `json:"data"`
 	}
-	if err := c.do("MakeService.CreateResource", "/code/v1/repository", body, &result); err != nil {
+	if err := c.do("MakeService.CreateResource", codeRepoPath(), body, &result); err != nil {
 		return nil, err
 	}
 	if result.Code == notFoundCode {

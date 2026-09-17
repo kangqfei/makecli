@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 api 包内的 Client.CreateRepository、CodeRepoResource.CloneURLFor（包内白盒），encoding/json、net/http、net/http/httptest、testing
+ * [INPUT]: 依赖 api 包内的 Client.CreateRepository、CodeRepoResource.CloneURLFor（包内白盒），encoding/json、net/http、net/http/httptest、testing，依赖 internal/build 的 Version
  * [OUTPUT]: 覆盖代码仓库服务调用与 cloneUrl 收口逻辑的单元测试
  * [POS]: internal/api 模块 repository.go 的配套测试，用 httptest 隔离网络
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -12,15 +12,18 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/qfeius/makecli/internal/build"
 )
 
 func TestCreateRepository(t *testing.T) {
 	t.Run("sends correct request and parses dual-env response", func(t *testing.T) {
-		var gotTarget, gotPath string
+		var gotTarget, gotPath, gotVersion string
 		var gotBody map[string]any
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			gotTarget = r.Header.Get("X-Make-Target")
 			gotPath = r.URL.Path
+			gotVersion = r.URL.Query().Get("version")
 			_ = json.NewDecoder(r.Body).Decode(&gotBody)
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{
@@ -50,6 +53,9 @@ func TestCreateRepository(t *testing.T) {
 		}
 		if gotPath != "/code/v1/repository" {
 			t.Errorf("path = %q, want /code/v1/repository", gotPath)
+		}
+		if gotVersion != build.Version {
+			t.Errorf("version query = %q, want %q", gotVersion, build.Version)
 		}
 		if gotBody["type"] != "Make.Code.Repository" || gotBody["appKey"] != "myapp" {
 			t.Errorf("unexpected request body: %v", gotBody)
