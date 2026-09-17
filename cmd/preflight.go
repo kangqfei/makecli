@@ -3,7 +3,7 @@
  *          gopkg.in/yaml.v3、github.com/spf13/cobra、cmd/app（loadAppManifestFromFile）、cmd/app_create（appDSLPath）
  * [OUTPUT]: 对外提供 newPreflightCmd 函数、errPreflightFailed 哨兵错误
  * [POS]: cmd 模块的顶层 preflight 命令，以 make-build-service build_spec.md 第 5 节检查
- *        清单为实现依据（设计定稿 docs/superpowers/specs/2026-07-07-preflight-buildspec-design.md）：
+ *        清单为实现依据：
  *        构建模式 A/B 自动判定、包管理器按 lockfile 优先级判定（buildPreflightContext 一次
  *        收集事实），preflightChecks 表驱动逐项检查（ERROR/WARN/INFO 三级、条目与 spec 1:1、
  *        另有 makecli 自有 D1=apps/dsl），失败输出附 How to fix 指引（面向 AI agent 一步收敛）；
