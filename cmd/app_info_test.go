@@ -79,7 +79,7 @@ func TestRunAppInfo(t *testing.T) {
 		for _, want := range []string{
 			"Key:", "apptest_001", "测试应用", "demo app", "1.0.0", "2026-01-01T10:00:00Z",
 			"Pair App Key:", "apptest_001_beta_",
-			"ENVIRONMENT", "preview", "production", "Ready", "9b05c7d",
+			"ENVIRONMENT", "beta", "production", "Ready", "9b05c7d",
 			"https://apptest-001-preview-90.dev-make.qtech.cn",
 			"https://apptest-001-prod-90.dev-make.qtech.cn",
 		} {

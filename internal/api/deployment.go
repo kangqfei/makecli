@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 client.go 的 Client.do / notFoundCode / ErrNotFound、fmt
- * [OUTPUT]: 对外提供 EnvDeployment / DeploymentOverview 类型（含 Env(name) 环境选择器）、Client.GetDeploymentOverview(appKey) 方法
+ * [OUTPUT]: 对外提供 EnvBeta / EnvProduction 用户面环境常量与 ServerEnvKey / DisplayEnv 词汇翻译（beta ⇄ 服务端 preview）、 EnvDeployment / DeploymentOverview 类型（含 Env(name) 环境选择器）、Client.GetDeploymentOverview(appKey) 方法
  * [POS]: internal/api 的部署服务（make-deployment）调用层，POST /deployment/v1/deployment/overview，
  *        与 client.go 的 Meta 操作共用 Client 与 do 原语；被 cmd/app_info 与 cmd/deploy（成功后带出环境 URL）消费
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -10,7 +10,35 @@ package api
 
 import "fmt"
 
-// EnvDeployment 描述单个环境（preview/production）的部署状态。
+// ---------------------------------- 环境词汇 ----------------------------------
+
+// 用户面环境词汇是 beta / production（与 App 的 product/beta 配对、Make Console 一致）；
+// 服务端把 beta 环境仍以 "preview" 为 key（仓库 properties.env、部署总览字段、构建任务 environment）。
+// ServerEnvKey / DisplayEnv 是这层翻译仅有的两处出入口，其余代码只说用户面词汇。
+const (
+	EnvBeta       = "beta"
+	EnvProduction = "production"
+
+	serverEnvPreview = "preview" // 服务端对 beta 环境的历史命名
+)
+
+// ServerEnvKey 把用户面环境名翻译成服务端 key（beta → preview，其余原样，服务端 key 传入也原样）
+func ServerEnvKey(env string) string {
+	if env == EnvBeta {
+		return serverEnvPreview
+	}
+	return env
+}
+
+// DisplayEnv 把服务端环境 key 翻译成用户面词汇（preview → beta，其余原样）
+func DisplayEnv(key string) string {
+	if key == serverEnvPreview {
+		return EnvBeta
+	}
+	return key
+}
+
+// EnvDeployment 描述单个环境（beta/production）的部署状态。
 // URL 是该环境的访问地址，是 app info 命令的核心产出。
 type EnvDeployment struct {
 	Status         string `json:"status"`
@@ -32,13 +60,13 @@ type DeploymentOverview struct {
 	Production *EnvDeployment `json:"production"`
 }
 
-// Env 按环境名（preview/production）选取对应环境的部署状态；未知名或该环境从未部署返回 nil。
-// 把「环境名 → 字段」的分支收口在类型内部，调用方免于 preview/production 双路 if。
+// Env 按环境名选取对应环境的部署状态，用户面 beta 与服务端 preview 均接受（经 ServerEnvKey 归一）；
+// 未知名或该环境从未部署返回 nil。把「环境名 → 字段」的分支收口在类型内部，调用方免于双路 if。
 func (o *DeploymentOverview) Env(name string) *EnvDeployment {
-	switch name {
-	case "preview":
+	switch ServerEnvKey(name) {
+	case serverEnvPreview:
 		return o.Preview
-	case "production":
+	case EnvProduction:
 		return o.Production
 	default:
 		return nil

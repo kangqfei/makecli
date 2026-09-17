@@ -154,11 +154,11 @@ func setupDeployEnv(t *testing.T) *pushCall {
 // ---------------------------------- runDeploy 编排（真仓库门控 + 推送桩） ----------------------------------
 
 func TestRunDeploy(t *testing.T) {
-	t.Run("deploys to preview", func(t *testing.T) {
+	t.Run("deploys to beta", func(t *testing.T) {
 		p := setupDeployEnv(t)
 
 		out := captureStdout(t, func() {
-			if err := runDeploy("preview", false, false); err != nil {
+			if err := runDeploy("beta", false, false); err != nil {
 				t.Errorf("runDeploy: %v", err)
 			}
 		})
@@ -172,7 +172,7 @@ func TestRunDeploy(t *testing.T) {
 		if p.token == "" {
 			t.Error("token should not be empty")
 		}
-		if !strings.Contains(out, "Deployed 'myapp' to preview") {
+		if !strings.Contains(out, "Deployed 'myapp' to beta") {
 			t.Errorf("output missing success line: %q", out)
 		}
 	})
@@ -206,7 +206,7 @@ func TestRunDeploy(t *testing.T) {
 		p.install(t)
 
 		out := captureStdout(t, func() {
-			if err := runDeploy("preview", false, false); err != nil {
+			if err := runDeploy("beta", false, false); err != nil {
 				t.Errorf("runDeploy: %v", err)
 			}
 		})
@@ -214,7 +214,7 @@ func TestRunDeploy(t *testing.T) {
 		if !p.called {
 			t.Error("expected push to be called")
 		}
-		if !strings.Contains(out, "Deployed 'fromdsl' to preview") {
+		if !strings.Contains(out, "Deployed 'fromdsl' to beta") {
 			t.Errorf("expected app key from app.yaml in output, got: %q", out)
 		}
 	})
@@ -233,7 +233,7 @@ func TestRunDeploy(t *testing.T) {
 	t.Run("fails when app.yaml missing", func(t *testing.T) {
 		chdir(t, t.TempDir()) // 干净目录，无 apps/dsl/app.yaml
 
-		if err := runDeploy("preview", false, false); err == nil {
+		if err := runDeploy("beta", false, false); err == nil {
 			t.Fatal("expected error when app.yaml is missing")
 		}
 	})
@@ -241,7 +241,7 @@ func TestRunDeploy(t *testing.T) {
 	t.Run("fails when app.yaml has invalid key", func(t *testing.T) {
 		enterAppDir(t, "_bad") // 下划线开头，validResourceKey 拒绝
 
-		if err := runDeploy("preview", false, false); err == nil {
+		if err := runDeploy("beta", false, false); err == nil {
 			t.Fatal("expected error for invalid key in app.yaml")
 		}
 	})
@@ -254,7 +254,7 @@ func TestRunDeploy(t *testing.T) {
 		p := &pushCall{}
 		p.install(t)
 
-		err := runDeploy("preview", false, false)
+		err := runDeploy("beta", false, false)
 		if err == nil {
 			t.Fatal("expected error when no git repository")
 		}
@@ -277,7 +277,7 @@ func TestRunDeploy(t *testing.T) {
 		p := &pushCall{}
 		p.install(t)
 
-		err := runDeploy("preview", false, false)
+		err := runDeploy("beta", false, false)
 		if err == nil {
 			t.Fatal("expected error when nothing committed")
 		}
@@ -299,7 +299,7 @@ func TestRunDeploy(t *testing.T) {
 		p := &pushCall{}
 		p.install(t)
 
-		err := runDeploy("preview", false, false)
+		err := runDeploy("beta", false, false)
 		if err == nil {
 			t.Fatal("expected error when working tree is dirty")
 		}
@@ -318,7 +318,7 @@ func TestRunDeploy(t *testing.T) {
 		p := &pushCall{}
 		p.install(t)
 
-		if err := runDeploy("preview", false, false); err == nil {
+		if err := runDeploy("beta", false, false); err == nil {
 			t.Fatal("expected error for missing credentials")
 		}
 		if p.called {
@@ -338,7 +338,7 @@ func TestRunDeploy(t *testing.T) {
 		p := &pushCall{}
 		p.install(t)
 
-		err := runDeploy("preview", false, false)
+		err := runDeploy("beta", false, false)
 		if err == nil {
 			t.Fatal("expected error when app is not registered")
 		}
@@ -362,7 +362,7 @@ func TestRunDeploy(t *testing.T) {
 		p := &pushCall{}
 		p.install(t)
 
-		err := runDeploy("preview", false, false)
+		err := runDeploy("beta", false, false)
 		if err == nil {
 			t.Fatal("expected error when registration check fails")
 		}
@@ -385,7 +385,7 @@ func TestRunDeploy(t *testing.T) {
 		t.Setenv(EnvRepoServerURL, srv.URL)
 		(&pushCall{}).install(t)
 
-		if err := runDeploy("preview", false, false); err == nil {
+		if err := runDeploy("beta", false, false); err == nil {
 			t.Fatal("expected error on API failure")
 		}
 	})
@@ -401,7 +401,7 @@ func TestRunDeploy(t *testing.T) {
 		t.Setenv(EnvRepoServerURL, srv.URL)
 		(&pushCall{}).install(t)
 
-		if err := runDeploy("preview", false, false); err == nil {
+		if err := runDeploy("beta", false, false); err == nil {
 			t.Fatal("expected error when clone url missing")
 		}
 	})
@@ -411,7 +411,7 @@ func TestRunDeploy(t *testing.T) {
 		p.err = errors.New("push rejected")
 
 		var err error
-		_ = captureStdout(t, func() { err = runDeploy("preview", false, false) })
+		_ = captureStdout(t, func() { err = runDeploy("beta", false, false) })
 		if err == nil {
 			t.Fatal("expected push error to propagate")
 		}
@@ -476,20 +476,20 @@ func TestRunDeployProductionConfirm(t *testing.T) {
 		}
 	})
 
-	t.Run("preview never prompts", func(t *testing.T) {
+	t.Run("beta never prompts", func(t *testing.T) {
 		p := setupDeployEnv(t)
 		orig := confirmDeployFunc
 		confirmDeployFunc = func(string) error {
-			t.Error("confirm must not run for preview")
+			t.Error("confirm must not run for beta")
 			return nil
 		}
 		t.Cleanup(func() { confirmDeployFunc = orig })
 
-		if err := runDeploy("preview", false, false); err != nil {
+		if err := runDeploy("beta", false, false); err != nil {
 			t.Errorf("runDeploy: %v", err)
 		}
 		if !p.called {
-			t.Error("expected preview push")
+			t.Error("expected beta push")
 		}
 	})
 
@@ -518,7 +518,7 @@ func TestRunDeployProductionConfirm(t *testing.T) {
 }
 
 // TestDeployDefaultsToPreview 走真实 cobra 解析：不传 --env 时 `app deploy` 不报缺参，
-// 且默认部署目标是 preview（production 须显式 opt-in）。
+// 且默认部署目标是 beta（production 须显式 opt-in）。
 func TestDeployDefaultsToPreview(t *testing.T) {
 	p := setupDeployEnv(t)
 
@@ -533,8 +533,8 @@ func TestDeployDefaultsToPreview(t *testing.T) {
 	if p.cloneURL != "https://repo.example/org/myapp-preview.git" {
 		t.Errorf("default deploy target = %q, want preview", p.cloneURL)
 	}
-	if !strings.Contains(out, "Deployed 'myapp' to preview") {
-		t.Errorf("output should confirm preview deploy, got: %q", out)
+	if !strings.Contains(out, "Deployed 'myapp' to beta") {
+		t.Errorf("output should confirm beta deploy, got: %q", out)
 	}
 }
 
@@ -1135,7 +1135,7 @@ func TestDeployWaitAfterPush(t *testing.T) {
 	if !p.called {
 		t.Error("--wait must still push first")
 	}
-	for _, want := range []string{"Deployed 'myapp' to preview", "Waiting for build", "SUCCESS / DEPLOY", "Status:"} {
+	for _, want := range []string{"Deployed 'myapp' to beta", "Waiting for build", "SUCCESS / DEPLOY", "Status:"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q, got: %q", want, out)
 		}

@@ -49,7 +49,7 @@ type CodeRepoMeta struct {
 	Repositories []CodeRepo `json:"repositories"`
 }
 
-// CodeRepoProperties 是响应的 properties 段，Env 以环境名（preview/production）为 key
+// CodeRepoProperties 是响应的 properties 段，Env 以服务端环境 key（preview/production）为 key
 type CodeRepoProperties struct {
 	OrgID        int64                  `json:"orgId"`
 	Private      bool                   `json:"private"`
@@ -66,13 +66,14 @@ type CodeRepoResource struct {
 	Properties CodeRepoProperties `json:"properties"`
 }
 
-// CloneURLFor 返回指定环境的仓库推送地址，把三种响应形态收口为一个查询：
+// CloneURLFor 返回指定环境的仓库推送地址（env 用用户面词汇 beta/production，内部经 ServerEnvKey 翻译），把三种响应形态收口为一个查询：
 //  1. properties.env.<env>.repository.cloneUrl（双环境标准形态）
 //  2. meta.repositories[].cloneUrl（按 environment 匹配的兼容形态）
 //  3. meta.cloneUrl（历史单仓库形态，对所有环境生效）
 //
 // 找不到时返回空串，由调用方决定如何报错。
 func (r *CodeRepoResource) CloneURLFor(env string) string {
+	env = ServerEnvKey(env)
 	if e, ok := r.Properties.Env[env]; ok && e.Repository.CloneURL != "" {
 		return e.Repository.CloneURL
 	}

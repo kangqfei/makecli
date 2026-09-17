@@ -1,10 +1,10 @@
 /**
  * [INPUT]: 依赖 cmd/client（newClientFromProfile/newRepoClientFromProfile）、cmd/app（loadAppManifestFromFile/validResourceKey）、cmd/app_create（appDSLPath）、cmd/git（openRepo/assertDeployable）、cmd/output（resolveOutputFormat/writeJSON/outputAuto/outputFlagUsage）、internal/api（ErrNotFound 哨兵、GetBuildTask/BuildTask 及 Finished/Succeeded 终态判定、GetDeploymentOverview/DeploymentOverview.Env 环境 URL）、errors、fmt、io、os、slices、strings、time、charm.land/huh/v2（production 确认表单）、github.com/mattn/go-isatty（TTY 检测）、github.com/go-git/go-git/v5（及 config/plumbing/transport/http 子包）、github.com/spf13/cobra
- * [OUTPUT]: 对外提供 newDeployCmd 函数；包内 assertAppRegistered（push 前 Meta 注册门控）、confirmProductionDeploy（production 部署确认）、runDeployStatus/waitAndRenderBuild/waitForBuild/deploymentURLFor/renderBuildResult/renderBuildStatus/formatBuildError/shortSha（--status/--wait 构建进度查询、等待与渲染）、buildStatusView（JSON 视图：BuildTask 平铺 + url omitempty）、errBuildFailed/errWaitTimeout 退出码哨兵（errors.go ExitCode 翻译为 2/124）、defaultWaitTimeout 常量；包级 gitPushFunc / confirmDeployFunc 可打桩变量（测试替换推送 / 终端交互，参照 update.go applyFunc、app_delete.go confirmDeleteFunc 模式）、buildPollInterval 可打桩轮询间隔；envPreview/envProduction 环境常量
- * [POS]: cmd 模块 app 命令组的 deploy 子命令——「纯 push 已提交状态」。--env 默认 envPreview（安全），production 须显式 opt-in 且 push 前过 continue/abort 确认（--yes/-y 跳过，非交互终端拒绝并指引 --yes）。--status 短路部署，改为按本地 HEAD sha 反查构建服务（api.GetBuildTask，commitSha 即任务定位键）平铺渲染部署进度；--output table|json 双格式（json 仅限 --status 模式，deploy 推送输出会混入 stdout）。--wait 阻塞至构建终态（deploy --wait = push 后接上与 --status --wait 完全同一条等待路径）：轮询间隔 buildPollInterval=3s，ErrNotFound 视为「任务尚未创建」继续等（webhook 异步建任务窗口期），进度只在 status/phase 跃迁时打一行（json 模式走 stderr 保持 stdout 纯 JSON），--timeout 有界兜底（默认 5m，须与 --wait 搭配）；终态渲染完整详情后，未成功以 errBuildFailed（退出码 2）、超时以 errWaitTimeout（退出码 124）上抛，CI/agent 凭退出码判定。成功任务经 deploymentURLFor 带出对应环境访问 URL（与 app info 同源 GetDeploymentOverview，按 task.Environment 经 Env 选择器取址；URL 是结果装饰——仅 SUCCESS 查询、总览失败降级为空不影响主输出），table 尾行 URL:、json 平铺 url 字段。从 apps/dsl/app.yaml 读 app key，
+ * [OUTPUT]: 对外提供 newDeployCmd 函数；包内 assertAppRegistered（push 前 Meta 注册门控）、confirmProductionDeploy（production 部署确认）、runDeployStatus/waitAndRenderBuild/waitForBuild/deploymentURLFor/renderBuildResult/renderBuildStatus/formatBuildError/shortSha（--status/--wait 构建进度查询、等待与渲染）、buildStatusView（JSON 视图：BuildTask 平铺 + url omitempty）、errBuildFailed/errWaitTimeout 退出码哨兵（errors.go ExitCode 翻译为 2/124）、defaultWaitTimeout 常量；包级 gitPushFunc / confirmDeployFunc 可打桩变量（测试替换推送 / 终端交互，参照 update.go applyFunc、app_delete.go confirmDeleteFunc 模式）、buildPollInterval 可打桩轮询间隔；envBeta/envProduction 环境常量（别名 api.EnvBeta/EnvProduction）
+ * [POS]: cmd 模块 app 命令组的 deploy 子命令——「纯 push 已提交状态」。--env 默认 envBeta（安全；用户面词汇 beta/production，服务端 key preview 的翻译收口在 api.ServerEnvKey/DisplayEnv），production 须显式 opt-in 且 push 前过 continue/abort 确认（--yes/-y 跳过，非交互终端拒绝并指引 --yes）。--status 短路部署，改为按本地 HEAD sha 反查构建服务（api.GetBuildTask，commitSha 即任务定位键）平铺渲染部署进度；--output table|json 双格式（json 仅限 --status 模式，deploy 推送输出会混入 stdout）。--wait 阻塞至构建终态（deploy --wait = push 后接上与 --status --wait 完全同一条等待路径）：轮询间隔 buildPollInterval=3s，ErrNotFound 视为「任务尚未创建」继续等（webhook 异步建任务窗口期），进度只在 status/phase 跃迁时打一行（json 模式走 stderr 保持 stdout 纯 JSON），--timeout 有界兜底（默认 5m，须与 --wait 搭配）；终态渲染完整详情后，未成功以 errBuildFailed（退出码 2）、超时以 errWaitTimeout（退出码 124）上抛，CI/agent 凭退出码判定。成功任务经 deploymentURLFor 带出对应环境访问 URL（与 app info 同源 GetDeploymentOverview，按 task.Environment 经 Env 选择器取址；URL 是结果装饰——仅 SUCCESS 查询、总览失败降级为空不影响主输出），table 尾行 URL:、json 平铺 url 字段。从 apps/dsl/app.yaml 读 app key，
  *        本地先行门控（openRepo 要求已 init、assertDeployable 要求有 commit 且工作树干净，脏/无仓库/无提交即报错，
  *        全在网络调用之前 fail-fast），再经 assertAppRegistered 用 Meta GetApp 把关 app 已注册（不存在即指引 app create -f，
- *        避免「有仓库、无 app」孤儿状态；在建仓库/推送之前短路），production 确认通过后再幂等准备 preview/production 仓库（MakeService.CreateResource）取 cloneUrl，
+ *        避免「有仓库、无 app」孤儿状态；在建仓库/推送之前短路），production 确认通过后再幂等准备 beta/production 仓库（MakeService.CreateResource）取 cloneUrl，
  *        用 go-git（纯 Go，不 shell-out）把当前 HEAD 推到固定分支（deployBranch，webhook 约定）；token 走 HTTP BasicAuth(make:<token>)。
  *        提交时机交还用户——deploy 不再自动 add/commit（建仓+ignore 由 `makecli app init` 负责）。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -31,14 +31,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// 部署目标环境——preview 是安全默认，production 是不可逆线上部署。
+// 部署目标环境——beta 是安全默认，production 是不可逆线上部署（词汇与 beta ⇄ 服务端 preview 的翻译收口在 internal/api）
 const (
-	envPreview    = "preview"
-	envProduction = "production"
+	envBeta       = api.EnvBeta
+	envProduction = api.EnvProduction
 )
 
 // deployEnvs 是合法的部署环境集合，与服务端双仓库约定一一对应
-var deployEnvs = []string{envPreview, envProduction}
+var deployEnvs = []string{envBeta, envProduction}
 
 // confirmDeployFunc 为包级可打桩变量，单测替换以隔离真实终端交互（参照 app_delete.go confirmDeleteFunc 模式）
 var confirmDeployFunc = confirmProductionDeploy
@@ -81,7 +81,7 @@ func newDeployCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "deploy",
 		Short: "Deploy an app to Make Platform",
-		Example: `  makecli app deploy                         # 默认部署到 preview
+		Example: `  makecli app deploy                         # 默认部署到 beta
   makecli app deploy --wait                  # 部署并阻塞至构建终态（退出码 0 成功 / 2 失败 / 124 超时）
   makecli app deploy --env production        # 部署到 production（需确认）
   makecli app deploy --env production --yes  # 跳过确认（CI / 非交互）
@@ -123,7 +123,7 @@ func newDeployCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&env, "env", envPreview, "target environment: preview | production")
+	cmd.Flags().StringVar(&env, "env", envBeta, "target environment: beta | production")
 	cmd.Flags().BoolVar(&force, "force", false, "force push")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip the production deploy confirmation prompt")
 	cmd.Flags().BoolVar(&status, "status", false, "show build status of the current HEAD commit instead of deploying")
@@ -166,7 +166,7 @@ func runDeploy(env string, force, skipConfirm bool) error {
 	fmt.Printf("%-12s %s\n", "Environment:", env)
 
 	// production 是不可逆的线上部署——push 前要求显式 continue/abort 确认，--yes 跳过。
-	// 确认刻意在建仓库之前：abort 时连幂等的仓库准备都不白跑。preview 是安全默认，不拦。
+	// 确认刻意在建仓库之前：abort 时连幂等的仓库准备都不白跑。beta 是安全默认，不拦。
 	if env == envProduction && !skipConfirm {
 		if err := confirmDeployFunc(appKey); err != nil {
 			return err
@@ -333,7 +333,7 @@ func renderBuildStatus(task *api.BuildTask, url string) {
 	}
 	rows := []struct{ label, value string }{
 		{"App:", task.AppKey},
-		{"Environment:", task.Environment},
+		{"Environment:", api.DisplayEnv(task.Environment)},
 		{"Build:", fmt.Sprintf("#%d", task.ID)},
 		{"Version:", task.DeploymentVersion},
 		{"Commit:", commit},

@@ -63,6 +63,9 @@ func TestCreateRepository(t *testing.T) {
 		if got := repo.CloneURLFor("preview"); got != "https://repo.example/org/myapp-preview.git" {
 			t.Errorf("preview cloneUrl = %q", got)
 		}
+		if got := repo.CloneURLFor(EnvBeta); got != "https://repo.example/org/myapp-preview.git" {
+			t.Errorf("beta cloneUrl = %q, want the server's preview repo", got)
+		}
 		if got := repo.CloneURLFor("production"); got != "https://repo.example/org/myapp-production.git" {
 			t.Errorf("production cloneUrl = %q", got)
 		}

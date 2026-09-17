@@ -102,7 +102,7 @@ func renderAppInfo(app *api.App, overview *api.DeploymentOverview) {
 	table := tablewriter.NewTable(os.Stdout)
 	table.Header("ENVIRONMENT", "STATUS", "COMMIT", "URL")
 	_ = table.Bulk([][]string{
-		deploymentRow("preview", preview),
+		deploymentRow(api.EnvBeta, preview),
 		deploymentRow("production", production),
 	})
 	_ = table.Render()
