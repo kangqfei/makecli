@@ -40,15 +40,15 @@ func newAppDeleteCmd() *cobra.Command {
 	var yes bool
 
 	cmd := &cobra.Command{
-		Use:   "delete [key] --env production|beta|all",
+		Use:   "delete [key] --env production|beta|ALL",
 		Short: "Delete an app on Make",
 		Long: `Delete one half of a Make app pair. Every app is created as a product/beta pair;
 --env production deletes <key> itself, --env beta looks up the app and deletes its paired beta app,
---env all deletes beta first and then production (the server refuses to delete a product app
+--env ALL deletes beta first and then production (the server refuses to delete a product app
 while its beta pair still exists).`,
 		Example: `  makecli app delete myapp --env beta
   makecli app delete myapp --env production --yes
-  makecli app delete myapp --env all
+  makecli app delete myapp --env ALL
   makecli app delete -f app.yaml --env beta`,
 		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
@@ -64,7 +64,7 @@ while its beta pair still exists).`,
 	}
 
 	cmd.Flags().StringVarP(&file, "file", "f", "", "path to YAML file containing Make.App resource")
-	cmd.Flags().StringVar(&env, "env", "", "which environment to delete: production | beta | all (required, case-insensitive)")
+	cmd.Flags().StringVar(&env, "env", "", "which environment to delete: production | beta | ALL (required)")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip the deletion confirmation prompt")
 	_ = cmd.MarkFlagRequired("env")
 	return cmd
