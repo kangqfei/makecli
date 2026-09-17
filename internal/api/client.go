@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 bytes、encoding/json、errors、fmt、io、net/http、strings、time，依赖 debug.go 的 debugSink，依赖 internal/trace 的 TraceID/Traceparent
- * [OUTPUT]: 对外提供 Client 类型、ErrNotFound / ErrAuthFailed 哨兵错误、UniqueConstraintError 类型化错误（409 唯一性冲突，errors.As 判定）、Option / WithDebug(on, DebugFormat) / WithHeaders / WithDryRun 功能选项、New 构造函数、App / Field / Entity / EntityProperties / UniqueConstraint / RelationEnd / RelationProperties / Relation / Schema 类型、CreateApp(key, name, properties) / ListApps(page, size, filter) / DeleteApp(key) / GetApp(key) / CreateEntity(key, name, appKey, props) / ListEntities(appKey, page, size, filter) / GetEntity(appKey, key) / UpdateEntity(key, name, appKey, props) / DeleteEntity / CreateRelation(key, name, appKey, props) / UpdateRelation / ListRelations(appKey, ...) / GetRelation(appKey, key) / DeleteRelation / GetSchema(appKey) 方法。资源以 Key 为唯一标识符（英数下划线），Name 为用户可见展示名（支持中文）。Get* 方法在资源确实不存在时返回 ErrNotFound（可用 errors.Is 判定），其余错误（传输/非 not-found 业务码/解码）原样返回
+ * [OUTPUT]: 对外提供 Client 类型、ErrNotFound / ErrAuthFailed 哨兵错误、UniqueConstraintError 类型化错误（409 唯一性冲突，errors.As 判定）、Option / WithDebug(on, DebugFormat) / WithHeaders / WithDryRun 功能选项、New 构造函数、App（Role / PairAppKey / HostedEnv / KeyForEnv：product/beta 配对知识收口，环境 → 承载 app key）、RoleProduct / RoleBeta 常量 / Field / Entity / EntityProperties / UniqueConstraint / RelationEnd / RelationProperties / Relation / Schema 类型、CreateApp(key, name, properties) / ListApps(page, size, filter) / DeleteApp(key) / GetApp(key) / CreateEntity(key, name, appKey, props) / ListEntities(appKey, page, size, filter) / GetEntity(appKey, key) / UpdateEntity(key, name, appKey, props) / DeleteEntity / CreateRelation(key, name, appKey, props) / UpdateRelation / ListRelations(appKey, ...) / GetRelation(appKey, key) / DeleteRelation / GetSchema(appKey) 方法。资源以 Key 为唯一标识符（英数下划线），Name 为用户可见展示名（支持中文）。Get* 方法在资源确实不存在时返回 ErrNotFound（可用 errors.Is 判定），其余错误（传输/非 not-found 业务码/解码）原样返回
  * [POS]: internal/api 的核心，封装 Make Meta Service 的 HTTP 调用
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -152,6 +152,47 @@ type App struct {
 	Type       string         `json:"type"`
 	Meta       map[string]any `json:"meta"`
 	Properties map[string]any `json:"properties"`
+}
+
+// App 角色（MetaAPIDesign.md）：每个 App 是 product/beta 一对，meta.appRole 标角色，meta.pairAppKey 指向配对 app
+const (
+	RoleProduct = "product"
+	RoleBeta    = "beta"
+)
+
+// Role 返回 meta.appRole；缺省（历史 app）视为 product
+func (a *App) Role() string {
+	if role, _ := a.Meta["appRole"].(string); role == RoleBeta {
+		return RoleBeta
+	}
+	return RoleProduct
+}
+
+// PairAppKey 返回 meta.pairAppKey（无配对为空串）
+func (a *App) PairAppKey() string {
+	pair, _ := a.Meta["pairAppKey"].(string)
+	return pair
+}
+
+// HostedEnv 返回本 app 自身承载的环境：beta 角色承载 EnvBeta，product 角色承载 EnvProduction
+func (a *App) HostedEnv() string {
+	if a.Role() == RoleBeta {
+		return EnvBeta
+	}
+	return EnvProduction
+}
+
+// KeyForEnv 返回承载指定环境（EnvBeta / EnvProduction）的 app key：
+// 本 app 自身承载该环境则是自己，否则是配对 app。代码仓库、部署都挂在承载环境的那个 app 上，
+// 用户只需给一个 key，CLI 据服务端的角色/配对信息定位目标；无配对时报错。
+func (a *App) KeyForEnv(env string) (string, error) {
+	if env == a.HostedEnv() {
+		return a.Key, nil
+	}
+	if pair := a.PairAppKey(); pair != "" {
+		return pair, nil
+	}
+	return "", fmt.Errorf("app %q has no %s environment", a.Key, env)
 }
 
 // ---------------------------------- App 操作 ----------------------------------

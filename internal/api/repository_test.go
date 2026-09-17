@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 api 包内的 Client.CreateRepository、CodeRepoResource.CloneURLFor（包内白盒），encoding/json、net/http、net/http/httptest、testing，依赖 internal/build 的 Version
- * [OUTPUT]: 覆盖代码仓库服务调用与 cloneUrl 收口逻辑的单元测试
+ * [INPUT]: 依赖 api 包内的 Client.CreateRepository、CodeRepoResource.CloneURL（包内白盒），encoding/json、net/http、net/http/httptest、testing，依赖 internal/build 的 Version
+ * [OUTPUT]: 覆盖代码仓库服务调用（按 app 划分的仓库响应）与 CloneURL 回退的单元测试
  * [POS]: internal/api 模块 repository.go 的配套测试，用 httptest 隔离网络
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -17,7 +17,7 @@ import (
 )
 
 func TestCreateRepository(t *testing.T) {
-	t.Run("sends correct request and parses dual-env response", func(t *testing.T) {
+	t.Run("sends correct request and parses per-app repository response", func(t *testing.T) {
 		var gotTarget, gotPath, gotVersion string
 		var gotBody map[string]any
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -29,22 +29,19 @@ func TestCreateRepository(t *testing.T) {
 			_, _ = w.Write([]byte(`{
 				"code": 200, "msg": "repositories are ready",
 				"data": {
-					"appKey": "myapp", "type": "Make.Code.Repository",
+					"appKey": "myapp_beta_", "appRole": "beta", "type": "Make.Code.Repository",
 					"meta": {"version": "1.0.0", "owner": "1120076349311025262"},
 					"properties": {
 						"orgId": 1120076349311025262, "private": true,
-						"createdOrg": false, "createdRepos": ["preview", "production"],
-						"env": {
-							"preview":    {"repository": {"repoName": "myapp-preview", "giteaRepoId": 321, "cloneUrl": "https://repo.example/org/myapp-preview.git"}},
-							"production": {"repository": {"repoName": "myapp-production", "giteaRepoId": 322, "cloneUrl": "https://repo.example/org/myapp-production.git"}}
-						}
+						"createdOrg": false, "createdRepos": ["beta"],
+						"env": {"repository": {"repoName": "myapp_beta_", "giteaRepoId": 259, "cloneUrl": "https://repo.example/org/myapp_beta_.git"}}
 					}
 				}
 			}`))
 		}))
 		defer srv.Close()
 
-		repo, err := New(srv.URL, "test-token").CreateRepository("myapp")
+		repo, err := New(srv.URL, "test-token").CreateRepository("myapp_beta_")
 		if err != nil {
 			t.Fatalf("CreateRepository: %v", err)
 		}
@@ -57,27 +54,24 @@ func TestCreateRepository(t *testing.T) {
 		if gotVersion != build.Version {
 			t.Errorf("version query = %q, want %q", gotVersion, build.Version)
 		}
-		if gotBody["type"] != "Make.Code.Repository" || gotBody["appKey"] != "myapp" {
+		if gotBody["type"] != "Make.Code.Repository" || gotBody["appKey"] != "myapp_beta_" {
 			t.Errorf("unexpected request body: %v", gotBody)
 		}
-		if got := repo.CloneURLFor("preview"); got != "https://repo.example/org/myapp-preview.git" {
-			t.Errorf("preview cloneUrl = %q", got)
+		if repo.AppRole != "beta" {
+			t.Errorf("appRole = %q, want beta", repo.AppRole)
 		}
-		if got := repo.CloneURLFor(EnvBeta); got != "https://repo.example/org/myapp-preview.git" {
-			t.Errorf("beta cloneUrl = %q, want the server's preview repo", got)
+		if got := repo.CloneURL(); got != "https://repo.example/org/myapp_beta_.git" {
+			t.Errorf("cloneUrl = %q", got)
 		}
-		if got := repo.CloneURLFor("production"); got != "https://repo.example/org/myapp-production.git" {
-			t.Errorf("production cloneUrl = %q", got)
-		}
-		if repo.Properties.Env["preview"].Repository.MakeRepoID != 321 {
-			t.Errorf("preview MakeRepoID = %d, want 321", repo.Properties.Env["preview"].Repository.MakeRepoID)
+		if repo.Properties.Env.Repository.MakeRepoID != 259 {
+			t.Errorf("MakeRepoID = %d, want 259", repo.Properties.Env.Repository.MakeRepoID)
 		}
 	})
 
-	t.Run("fails on API error response", func(t *testing.T) {
+	t.Run("fails on non-200 business code", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"code": 422, "msg": "appKey hits gitea naming rule"}`))
+			_, _ = w.Write([]byte(`{"code": 422, "msg": "app not found"}`))
 		}))
 		defer srv.Close()
 
@@ -96,42 +90,25 @@ func TestCreateRepository(t *testing.T) {
 	})
 }
 
-func TestCloneURLFor(t *testing.T) {
-	t.Run("prefers properties.env", func(t *testing.T) {
+func TestCloneURL(t *testing.T) {
+	t.Run("prefers properties.env.repository", func(t *testing.T) {
 		r := &CodeRepoResource{
-			Meta: CodeRepoMeta{CloneURL: "https://legacy.git"},
-			Properties: CodeRepoProperties{Env: map[string]CodeRepoEnv{
-				"preview": {Repository: CodeRepo{CloneURL: "https://env.git"}},
-			}},
+			Meta:       CodeRepoMeta{CloneURL: "https://legacy.git"},
+			Properties: CodeRepoProperties{Env: CodeRepoEnv{Repository: CodeRepo{CloneURL: "https://env.git"}}},
 		}
-		if got := r.CloneURLFor("preview"); got != "https://env.git" {
-			t.Errorf("CloneURLFor = %q, want https://env.git", got)
+		if got := r.CloneURL(); got != "https://env.git" {
+			t.Errorf("CloneURL = %q, want https://env.git", got)
 		}
 	})
-
-	t.Run("falls back to meta.repositories by environment", func(t *testing.T) {
-		r := &CodeRepoResource{
-			Meta: CodeRepoMeta{Repositories: []CodeRepo{
-				{Environment: "preview", CloneURL: "https://meta-preview.git"},
-				{Environment: "production", CloneURL: "https://meta-production.git"},
-			}},
-		}
-		if got := r.CloneURLFor("production"); got != "https://meta-production.git" {
-			t.Errorf("CloneURLFor = %q, want https://meta-production.git", got)
-		}
-	})
-
-	t.Run("falls back to legacy meta.cloneUrl for any env", func(t *testing.T) {
+	t.Run("falls back to meta.cloneUrl", func(t *testing.T) {
 		r := &CodeRepoResource{Meta: CodeRepoMeta{CloneURL: "https://single.git"}}
-		if got := r.CloneURLFor("production"); got != "https://single.git" {
-			t.Errorf("CloneURLFor = %q, want https://single.git", got)
+		if got := r.CloneURL(); got != "https://single.git" {
+			t.Errorf("CloneURL = %q, want https://single.git", got)
 		}
 	})
-
-	t.Run("returns empty when nothing matches", func(t *testing.T) {
-		r := &CodeRepoResource{}
-		if got := r.CloneURLFor("preview"); got != "" {
-			t.Errorf("CloneURLFor = %q, want empty", got)
+	t.Run("empty when nothing present", func(t *testing.T) {
+		if got := (&CodeRepoResource{}).CloneURL(); got != "" {
+			t.Errorf("CloneURL = %q, want empty", got)
 		}
 	})
 }

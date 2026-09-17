@@ -446,3 +446,34 @@ func TestGetRelationNotFoundSemantics(t *testing.T) {
 		}
 	})
 }
+
+func TestAppKeyForEnv(t *testing.T) {
+	product := &App{Key: "shop", Meta: map[string]any{"appRole": "product", "pairAppKey": "shop_beta_"}}
+	beta := &App{Key: "shop_beta_", Meta: map[string]any{"appRole": "beta", "pairAppKey": "shop"}}
+	legacy := &App{Key: "old", Meta: map[string]any{}} // 无 appRole 的历史 app 视为 product
+	tests := []struct {
+		name    string
+		app     *App
+		env     string
+		want    string
+		wantErr bool
+	}{
+		{"product/beta → pair", product, EnvBeta, "shop_beta_", false},
+		{"product/production → self", product, EnvProduction, "shop", false},
+		{"beta/beta → self", beta, EnvBeta, "shop_beta_", false},
+		{"beta/production → pair", beta, EnvProduction, "shop", false},
+		{"legacy/production → self", legacy, EnvProduction, "old", false},
+		{"legacy/beta → 无配对报错", legacy, EnvBeta, "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.app.KeyForEnv(tt.env)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("KeyForEnv = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 client.go 的 Client.do / notFoundCode / ErrNotFound、fmt、net/url，依赖 internal/build 的 Version
- * [OUTPUT]: 对外提供 CodeRepo / CodeRepoEnv / CodeRepoMeta / CodeRepoProperties / CodeRepoResource 类型、
- *           Client.CreateRepository(appKey) 方法、CodeRepoResource.CloneURLFor(env) 收口方法
+ * [OUTPUT]: 对外提供 CodeRepo / CodeRepoEnv / CodeRepoMeta / CodeRepoProperties / CodeRepoResource（含 AppRole）类型、
+ *           Client.CreateRepository(appKey) 方法、CodeRepoResource.CloneURL() 收口方法（仓库按 app 划分，环境 → app 由 App.KeyForEnv 定位）
  * [POS]: internal/api 的代码仓库服务（make-repo）调用层，POST /code/v1/repository?version=<cli 版本>，
  *        经 X-Make-Target 区分动作；与 client.go 的 Meta 操作共用 Client 与 do 原语。
  *        version 查询参数是服务端强制升级门禁的依据（缺失即拒绝并提示 makecli update）
@@ -27,60 +27,50 @@ func codeRepoPath() string {
 }
 
 // CodeRepo 描述单个远端仓库（repoName / cloneUrl；MakeRepoID 映射服务端 giteaRepoId 字段——
-// json tag 是线上契约不可改，Go 字段名去耦底层实现）。
-// Environment 仅在 meta.repositories 兼容形态中出现。
+// json tag 是线上契约不可改，Go 字段名去耦底层实现）
 type CodeRepo struct {
-	RepoName    string `json:"repoName"`
-	MakeRepoID  int64  `json:"giteaRepoId"`
-	CloneURL    string `json:"cloneUrl"`
-	Environment string `json:"environment,omitempty"`
+	RepoName   string `json:"repoName"`
+	MakeRepoID int64  `json:"giteaRepoId"`
+	CloneURL   string `json:"cloneUrl"`
 }
 
-// CodeRepoEnv 包装单个环境下的仓库信息（properties.env.<env>.repository）
+// CodeRepoEnv 是响应的 properties.env 段：一个 app 只承载一个环境，故只有一个 repository
 type CodeRepoEnv struct {
 	Repository CodeRepo `json:"repository"`
 }
 
-// CodeRepoMeta 是响应的 meta 段；CloneURL / Repositories 为历史兼容形态
+// CodeRepoMeta 是响应的 meta 段；CloneURL 为历史单仓库形态的兼容字段
 type CodeRepoMeta struct {
-	Version      string     `json:"version"`
-	Owner        string     `json:"owner"`
-	CloneURL     string     `json:"cloneUrl"`
-	Repositories []CodeRepo `json:"repositories"`
+	Version  string `json:"version"`
+	Owner    string `json:"owner"`
+	CloneURL string `json:"cloneUrl"`
 }
 
-// CodeRepoProperties 是响应的 properties 段，Env 以服务端环境 key（preview/production）为 key
+// CodeRepoProperties 是响应的 properties 段
 type CodeRepoProperties struct {
-	OrgID        int64                  `json:"orgId"`
-	Private      bool                   `json:"private"`
-	CreatedOrg   bool                   `json:"createdOrg"`
-	CreatedRepos []string               `json:"createdRepos"`
-	Env          map[string]CodeRepoEnv `json:"env"`
+	OrgID        int64       `json:"orgId"`
+	Private      bool        `json:"private"`
+	CreatedOrg   bool        `json:"createdOrg"`
+	CreatedRepos []string    `json:"createdRepos"`
+	Env          CodeRepoEnv `json:"env"`
 }
 
-// CodeRepoResource 是 /code/v1/repository 各动作返回的 data 段
+// CodeRepoResource 是 /code/v1/repository 各动作返回的 data 段。
+// 仓库按 app 而非按环境划分：product / beta 配对各自一个仓库，环境 → app 的定位由 App.KeyForEnv 完成，
+// 本资源只回答「这个 app 的仓库在哪」
 type CodeRepoResource struct {
 	AppKey     string             `json:"appKey"`
+	AppRole    string             `json:"appRole"`
 	Type       string             `json:"type"`
 	Meta       CodeRepoMeta       `json:"meta"`
 	Properties CodeRepoProperties `json:"properties"`
 }
 
-// CloneURLFor 返回指定环境的仓库推送地址（env 用用户面词汇 beta/production，内部经 ServerEnvKey 翻译），把三种响应形态收口为一个查询：
-//  1. properties.env.<env>.repository.cloneUrl（双环境标准形态）
-//  2. meta.repositories[].cloneUrl（按 environment 匹配的兼容形态）
-//  3. meta.cloneUrl（历史单仓库形态，对所有环境生效）
-//
-// 找不到时返回空串，由调用方决定如何报错。
-func (r *CodeRepoResource) CloneURLFor(env string) string {
-	env = ServerEnvKey(env)
-	if e, ok := r.Properties.Env[env]; ok && e.Repository.CloneURL != "" {
-		return e.Repository.CloneURL
-	}
-	for _, repo := range r.Meta.Repositories {
-		if repo.Environment == env && repo.CloneURL != "" {
-			return repo.CloneURL
-		}
+// CloneURL 返回本 app 仓库的推送地址：properties.env.repository.cloneUrl，缺失退回历史 meta.cloneUrl；
+// 都没有返回空串，由调用方决定如何报错
+func (r *CodeRepoResource) CloneURL() string {
+	if u := r.Properties.Env.Repository.CloneURL; u != "" {
+		return u
 	}
 	return r.Meta.CloneURL
 }

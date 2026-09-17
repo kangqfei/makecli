@@ -28,7 +28,6 @@ const (
 	appRoleProduction = "production"
 	appRoleBeta       = "beta"
 	envAll            = "all"
-	metaRoleProduct   = "product"
 )
 
 // confirmDeleteFunc 为包级可打桩变量，单测替换以隔离真实终端交互
@@ -81,18 +80,17 @@ func runAppDeleteFromFile(path, env string, skipConfirm bool) error {
 // deleteStep 是一次实际删除：target 是发给服务端的 key，env 是用户面的环境名
 type deleteStep struct{ target, env string }
 
-// betaPairKey 以服务端为准取 product app 的配对 beta key：GetApp 读 meta.pairAppKey，并校验 appRole 是 product——
+// betaPairKey 以服务端为准取 product app 的配对 beta key，并校验角色是 product——
 // 否则把 beta key 传进来会顺着 pairAppKey 反删 product。无配对返回空串，由调用方按 env 语义决定是否报错
 func betaPairKey(client *api.Client, key string) (string, error) {
 	app, err := client.GetApp(key)
 	if err != nil {
 		return "", err
 	}
-	if role, _ := app.Meta["appRole"].(string); role != metaRoleProduct {
-		return "", fmt.Errorf("%q is a %s app, not a product app: pass the product key instead", key, role)
+	if app.Role() != api.RoleProduct {
+		return "", fmt.Errorf("%q is a %s app, not a product app: pass the product key instead", key, app.Role())
 	}
-	pair, _ := app.Meta["pairAppKey"].(string)
-	return pair, nil
+	return app.PairAppKey(), nil
 }
 
 // resolveDeleteSteps 把「product key + --env」展开成有序删除步骤：

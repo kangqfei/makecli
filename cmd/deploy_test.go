@@ -77,17 +77,18 @@ func gitCommitAll(t *testing.T) {
 // newMockRepoServer 启动返回双环境仓库响应的代码仓库服务 mock
 func newMockRepoServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			AppKey string `json:"appKey"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"code": 200, "msg": "repositories are ready",
 			"data": map[string]any{
-				"appKey": "myapp", "type": "Make.Code.Repository",
+				"appKey": body.AppKey, "type": "Make.Code.Repository",
 				"properties": map[string]any{
-					"env": map[string]any{
-						"preview":    map[string]any{"repository": map[string]any{"cloneUrl": "https://repo.example/org/myapp-preview.git"}},
-						"production": map[string]any{"repository": map[string]any{"cloneUrl": "https://repo.example/org/myapp-production.git"}},
-					},
+					"env": map[string]any{"repository": map[string]any{"cloneUrl": "https://repo.example/org/" + body.AppKey + ".git"}},
 				},
 			},
 		})
@@ -104,7 +105,8 @@ func newAppExistsMeta(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"code": 200, "msg": "ok",
-			"data": map[string]any{"key": "app", "name": "app", "type": "Make.App"},
+			"data": map[string]any{"key": "myapp", "name": "myapp", "type": "Make.App",
+				"meta": map[string]any{"appRole": "product", "pairAppKey": "myapp_beta_"}},
 		})
 	}))
 	t.Cleanup(srv.Close)
@@ -163,8 +165,8 @@ func TestRunDeploy(t *testing.T) {
 			}
 		})
 
-		if p.cloneURL != "https://repo.example/org/myapp-preview.git" {
-			t.Errorf("clone url = %q, want preview repo", p.cloneURL)
+		if p.cloneURL != "https://repo.example/org/myapp_beta_.git" {
+			t.Errorf("clone url = %q, want the beta pair app repo", p.cloneURL)
 		}
 		if p.force {
 			t.Errorf("force=%v, want false", p.force)
@@ -186,7 +188,7 @@ func TestRunDeploy(t *testing.T) {
 			}
 		})
 
-		if p.cloneURL != "https://repo.example/org/myapp-production.git" {
+		if p.cloneURL != "https://repo.example/org/myapp.git" {
 			t.Errorf("clone url = %q, want production repo", p.cloneURL)
 		}
 		if !p.force {
@@ -430,7 +432,7 @@ func TestRunDeployProductionConfirm(t *testing.T) {
 				t.Errorf("runDeploy: %v", err)
 			}
 		})
-		if p.cloneURL != "https://repo.example/org/myapp-production.git" {
+		if p.cloneURL != "https://repo.example/org/myapp.git" {
 			t.Errorf("clone url = %q, want production repo", p.cloneURL)
 		}
 		if !strings.Contains(out, "Deployed 'myapp' to production") {
@@ -530,7 +532,7 @@ func TestDeployDefaultsToPreview(t *testing.T) {
 		}
 	})
 
-	if p.cloneURL != "https://repo.example/org/myapp-preview.git" {
+	if p.cloneURL != "https://repo.example/org/myapp_beta_.git" {
 		t.Errorf("default deploy target = %q, want preview", p.cloneURL)
 	}
 	if !strings.Contains(out, "Deployed 'myapp' to beta") {
@@ -850,7 +852,8 @@ func newBuildSeqMeta(t *testing.T, seq ...map[string]any) (*httptest.Server, *in
 		default:
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"code": 200, "msg": "ok",
-				"data": map[string]any{"key": "myapp", "name": "myapp", "type": "Make.App"},
+				"data": map[string]any{"key": "myapp", "name": "myapp", "type": "Make.App",
+					"meta": map[string]any{"appRole": "product", "pairAppKey": "myapp_beta_"}},
 			})
 		}
 	}))
@@ -1248,4 +1251,71 @@ func devTree(t *testing.T, bareDir string) *object.Tree {
 		t.Fatal(err)
 	}
 	return tree
+}
+
+// newMetaWithRole 答 GetResource 为给定角色/配对的 app，供承载环境定位测试
+func newMetaWithRole(t *testing.T, role, pair string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code": 200, "msg": "ok",
+			"data": map[string]any{"key": "myapp", "name": "myapp", "type": "Make.App",
+				"meta": map[string]any{"appRole": role, "pairAppKey": pair}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// newCapturingRepoServer 答仓库地址并把请求体里的 appKey 抓到 *got
+func newCapturingRepoServer(t *testing.T, got *string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			AppKey string `json:"appKey"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		*got = body.AppKey
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code": 200, "msg": "ok",
+			"data": map[string]any{"properties": map[string]any{"env": map[string]any{
+				"repository": map[string]any{"cloneUrl": "https://repo.example/" + body.AppKey + ".git"},
+			}}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestDeployTargetsHostingApp 锁定「环境 → 承载 app」定位：仓库建在承载该环境的 app 名下
+func TestDeployTargetsHostingApp(t *testing.T) {
+	tests := []struct {
+		name, role, pair, env, wantRepoKey string
+		wantErr                            bool
+	}{
+		{"product app 的 beta 环境挂在 pairAppKey", "product", "myapp_beta_", "beta", "myapp_beta_", false},
+		{"product app 的 production 就是自己", "product", "myapp_beta_", "production", "myapp", false},
+		{"beta app 的 beta 环境就是自己", "beta", "myapp", "beta", "myapp", false},
+		{"product app 无配对时 beta 报错且不触仓库", "product", "", "beta", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_ = setupDeployEnv(t)
+			stubMetaServer(t, newMetaWithRole(t, tt.role, tt.pair).URL)
+			var repoKey string
+			t.Setenv(EnvRepoServerURL, newCapturingRepoServer(t, &repoKey).URL)
+			stubConfirmDeploy(t, nil)
+
+			var err error
+			_ = captureStdout(t, func() { err = runDeploy(tt.env, false, true) })
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if repoKey != tt.wantRepoKey {
+				t.Errorf("repository appKey = %q, want %q", repoKey, tt.wantRepoKey)
+			}
+		})
+	}
 }
