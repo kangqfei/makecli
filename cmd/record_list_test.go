@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 cmd 包内的 runRecordList / parseSortSpec（包内白盒），internal/config、encoding/json、net/http、net/http/httptest
- * [OUTPUT]: 覆盖 record list 子命令核心逻辑的单元测试（列表/JSON输出/空列表/无凭证/API错误/未知profile/非法页码/非法格式/非法排序）
+ * [INPUT]: 依赖 cmd 包内的 runRecordList（包内白盒），encoding/json、net/http、net/http/httptest、strings、testing
+ * [OUTPUT]: 覆盖 record list 子命令核心逻辑的单元测试（列表/JSON输出/空列表/无凭证/API错误/未知profile/非法页码/非法格式/非法 sort-json/sort-json 直透/filter 直透）
  * [POS]: cmd 模块 record_list.go 的配套测试，用 httptest 隔离网络、t.Setenv 隔离凭证
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -148,13 +148,47 @@ func TestRunRecordList(t *testing.T) {
 		}
 	})
 
-	t.Run("fails on invalid sort spec", func(t *testing.T) {
+	t.Run("fails on invalid sort-json", func(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
 		saveDefaultToken(t)
 		MetaServerURL = "http://unused"
-		if err := runRecordList("TODO", "User", 1, 20, outputTable, "", "bad", ""); err == nil {
-			t.Fatal("expected error for invalid sort spec")
+		err := runRecordList("TODO", "User", 1, 20, outputTable, "", "createdAt:desc", "")
+		if err == nil || !strings.Contains(err.Error(), "--sort-json") {
+			t.Fatalf("expected error naming --sort-json, got %v", err)
 		}
+	})
+
+	t.Run("sends sort-json as sort array", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			sort, ok := req["sort"].([]any)
+			if !ok || len(sort) != 2 {
+				t.Fatalf("expected sort array of 2, got %v", req["sort"])
+			}
+			first := sort[0].(map[string]any)
+			if first["fieldKey"] != "createdAt" || first["order"] != "desc" {
+				t.Errorf("unexpected first sort key: %v", first)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code": 200, "msg": "success",
+				"data":       []any{},
+				"pagination": map[string]any{"page": 1, "size": 20, "total": 0},
+			})
+		}))
+		defer srv.Close()
+		t.Setenv("HOME", t.TempDir())
+		saveDefaultToken(t)
+		MetaServerURL = srv.URL
+
+		_ = captureStdout(t, func() {
+			sortJSON := `[{"fieldKey":"createdAt","order":"desc"},{"fieldKey":"id","order":"asc"}]`
+			if err := runRecordList("TODO", "User", 1, 20, outputTable, "", sortJSON, ""); err != nil {
+				t.Fatalf("runRecordList with sort-json: %v", err)
+			}
+		})
 	})
 
 	t.Run("sends filter as Expression object", func(t *testing.T) {
@@ -187,45 +221,5 @@ func TestRunRecordList(t *testing.T) {
 			}
 		})
 		_ = out
-	})
-}
-
-func TestParseSortSpec(t *testing.T) {
-	t.Run("parses valid spec", func(t *testing.T) {
-		result, err := parseSortSpec("createdAt:desc,id:asc")
-		if err != nil {
-			t.Fatalf("parseSortSpec: %v", err)
-		}
-		if len(result) != 2 {
-			t.Fatalf("expected 2 sort fields, got %d", len(result))
-		}
-		if result[0].FieldKey != "createdAt" || result[0].Order != "desc" {
-			t.Errorf("unexpected first sort field: %+v", result[0])
-		}
-		if result[1].FieldKey != "id" || result[1].Order != "asc" {
-			t.Errorf("unexpected second sort field: %+v", result[1])
-		}
-	})
-
-	t.Run("rejects missing colon", func(t *testing.T) {
-		if _, err := parseSortSpec("bad"); err == nil {
-			t.Fatal("expected error for missing colon")
-		}
-	})
-
-	t.Run("rejects invalid order", func(t *testing.T) {
-		if _, err := parseSortSpec("field:up"); err == nil {
-			t.Fatal("expected error for invalid order")
-		}
-	})
-
-	t.Run("normalizes order case", func(t *testing.T) {
-		result, err := parseSortSpec("name:DESC")
-		if err != nil {
-			t.Fatalf("parseSortSpec: %v", err)
-		}
-		if result[0].Order != "desc" {
-			t.Errorf("expected normalized order 'desc', got %q", result[0].Order)
-		}
 	})
 }

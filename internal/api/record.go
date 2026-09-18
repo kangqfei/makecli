@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 encoding/json、fmt，依赖同包 Client.do / Client.post 方法、writeStatusErr（非 200 翻译，含 409 唯一性冲突，收口于 client.go）
- * [OUTPUT]: 对外提供 DeleteRecordResult / SortField / ListRecordOpts 类型、CreateRecord / GetRecord / UpdateRecord / UpdateRecordsBatch / DeleteRecords / ListRecords 方法（写方法违反唯一性约束时返回 UniqueConstraintError）
- * [POS]: internal/api 的 Data Service 层，封装 Record CRUD 操作，与 client.go 的 Meta Service 层平级
+ * [OUTPUT]: 对外提供 DeleteRecordResult / SortField / ListRecordOpts / GroupField / AggregateField / AggregateOpts 类型、CreateRecord / GetRecord / UpdateRecord / UpdateRecordsBatch / DeleteRecords / ListRecords / AggregateRecords 方法（写方法违反唯一性约束时返回 UniqueConstraintError）
+ * [POS]: internal/api 的 Data Service 层，封装 Record CRUD 与聚合统计（/data/v1/aggregate，声明式 GROUP BY），与 client.go 的 Meta Service 层平级；ListRecords / AggregateRecords 共用 listPage 解码分页响应
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -21,9 +21,11 @@ type DeleteRecordResult struct {
 	Message  string `json:"msg"`
 }
 
-// SortField 描述排序字段与方向（field key + 方向）
+// SortField 描述排序键与方向：Record 列表以 FieldKey 引用字段，聚合查询还可以 Alias 引用 group / aggregates 声明的别名。
+// 两个引用键互斥且由服务端裁决，CLI 只透传
 type SortField struct {
-	FieldKey string `json:"fieldKey"`
+	FieldKey string `json:"fieldKey,omitempty"`
+	Alias    string `json:"alias,omitempty"`
 	Order    string `json:"order"` // "asc" | "desc"
 }
 
@@ -35,6 +37,33 @@ type ListRecordOpts struct {
 	Filter string
 	Page   int
 	Size   int
+}
+
+// GroupField 是聚合查询的分组维度（DataAPIDesign「聚合统计 Record 数据」group 元素）：
+// Granularity 仅 Date 字段可用（day/week/month/quarter/year），Alias 缺省时输出列名为 FieldKey；取值合法性由服务端裁决
+type GroupField struct {
+	FieldKey    string `json:"fieldKey"`
+	Granularity string `json:"granularity,omitempty"`
+	Alias       string `json:"alias,omitempty"`
+}
+
+// AggregateField 是聚合查询的指标（aggregates 元素）：count 不带 FieldKey；Alias 是该指标在响应、aggregateFilter 与 sort 中的引用名
+type AggregateField struct {
+	FieldKey  string `json:"fieldKey,omitempty"`
+	Aggregate string `json:"aggregate"`
+	Alias     string `json:"alias"`
+}
+
+// AggregateOpts 封装 AggregateRecords 的参数
+// Filter（聚合前，WHERE）与 AggregateFilter（聚合后，HAVING）均为 CEL 文本，空串时不发送；Group 为空即单行全局聚合
+type AggregateOpts struct {
+	Group           []GroupField
+	Aggregates      []AggregateField
+	Filter          string
+	AggregateFilter string
+	Sort            []SortField
+	Page            int
+	Size            int
 }
 
 // ---------------------------------- Record 操作 ----------------------------------
@@ -154,18 +183,51 @@ func (c *Client) ListRecords(appKey, entityKey string, opts ListRecordOpts) ([]m
 		reqBody["sort"] = opts.Sort
 	}
 	if opts.Filter != "" {
-		reqBody["filter"] = map[string]any{"expression": opts.Filter}
+		reqBody["filter"] = expression(opts.Filter)
 	}
+	return c.listPage("/data/v1/record", reqBody)
+}
 
+// AggregateRecords 调用 MakeService.ListResources 对单个 Entity 做服务端聚合统计（POST /data/v1/aggregate）
+// 返回分组行列表（维度列为 {value,label}，指标列为裸数值）和分组总行数
+func (c *Client) AggregateRecords(appKey, entityKey string, opts AggregateOpts) ([]map[string]any, int, error) {
+	reqBody := map[string]any{
+		"appKey":     appKey,
+		"entityKey":  entityKey,
+		"aggregates": opts.Aggregates,
+		"pagination": map[string]any{"page": opts.Page, "size": opts.Size},
+	}
+	if len(opts.Group) > 0 {
+		reqBody["group"] = opts.Group
+	}
+	if len(opts.Sort) > 0 {
+		reqBody["sort"] = opts.Sort
+	}
+	if opts.Filter != "" {
+		reqBody["filter"] = expression(opts.Filter)
+	}
+	if opts.AggregateFilter != "" {
+		reqBody["aggregateFilter"] = expression(opts.AggregateFilter)
+	}
+	return c.listPage("/data/v1/aggregate", reqBody)
+}
+
+// expression 把 CEL 文本包成服务端的 Expression 对象（原样透传，合法性由服务端裁决）
+func expression(cel string) map[string]any {
+	return map[string]any{"expression": cel}
+}
+
+// listPage 发送 MakeService.ListResources 请求并解码分页响应，返回行列表与服务端 total
+func (c *Client) listPage(path string, reqBody map[string]any) ([]map[string]any, int, error) {
 	var result struct {
-		Code    int              `json:"code"`
-		Message string           `json:"msg"`
-		Data    []map[string]any `json:"data"`
+		Code       int              `json:"code"`
+		Message    string           `json:"msg"`
+		Data       []map[string]any `json:"data"`
 		Pagination struct {
 			Total int `json:"total"`
 		} `json:"pagination"`
 	}
-	if err := c.do("MakeService.ListResources", "/data/v1/record", reqBody, &result); err != nil {
+	if err := c.do("MakeService.ListResources", path, reqBody, &result); err != nil {
 		return nil, 0, err
 	}
 	if result.Code != 200 {
