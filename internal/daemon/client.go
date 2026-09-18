@@ -37,11 +37,15 @@ type Client struct {
 
 // NewClient 构造 Client；baseURL 形如 https://gateway.example.com。
 func NewClient(baseURL, token string) *Client {
-	return &Client{baseURL: baseURL, token: token, http: &http.Client{Timeout: 30 * time.Second}}
+	return &Client{baseURL: baseURL, token: token, http: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
 // call 执行统一调用风格请求并解包信封。
 func (c *Client) call(ctx context.Context, resource, target string, requestBody, responseData any) error {
+	return c.callWithHeaders(ctx, resource, target, requestBody, responseData, nil)
+}
+
+func (c *Client) callWithHeaders(ctx context.Context, resource, target string, requestBody, responseData any, headers http.Header) error {
 	bodyJSON, err := json.Marshal(requestBody)
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)
@@ -57,6 +61,9 @@ func (c *Client) call(ctx context.Context, resource, target string, requestBody,
 		request.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	request.Header.Set(TargetHeader, target)
+	for name, values := range headers {
+		request.Header[name] = append([]string(nil), values...)
+	}
 	response, err := c.http.Do(request)
 	if err != nil {
 		return fmt.Errorf("gateway unreachable: %w", err)
@@ -68,9 +75,9 @@ func (c *Client) call(ctx context.Context, resource, target string, requestBody,
 	}
 	var envelope Envelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return &APIError{HTTPStatus: response.StatusCode, Reason: "invalid_envelope", Msg: string(raw)}
+		return &APIError{HTTPStatus: response.StatusCode, Reason: "invalid_envelope", Msg: "服务端未返回合法信封"}
 	}
-	if response.StatusCode != http.StatusOK {
+	if response.StatusCode != http.StatusOK || envelope.Code != 200 {
 		var errorData ErrorData
 		_ = json.Unmarshal(envelope.Data, &errorData)
 		return &APIError{HTTPStatus: response.StatusCode, Reason: errorData.Reason, Msg: envelope.Msg}
@@ -103,6 +110,7 @@ func (c *Client) Heartbeat(ctx context.Context, request UpdateRuntimeRequest) (U
 // ClaimRuns 领取待执行 run（run-claim 资源的 CreateResource：claim 即创建租约）。
 func (c *Client) ClaimRuns(ctx context.Context, request CreateRunClaimRequest) ([]RunClaim, error) {
 	var claims []RunClaim
+	request.ExecutionProtocolVersion = "execution-v1"
 	err := c.call(ctx, ResourceRunClaim, TargetCreateResource, request, &claims)
 	return claims, err
 }
@@ -112,16 +120,15 @@ func (c *Client) UpdateRun(ctx context.Context, request UpdateRunRequest) error 
 	return c.call(ctx, ResourceRun, TargetUpdateResource, request, nil)
 }
 
+func (c *Client) RenewClaim(ctx context.Context, claim RunClaim) (RenewClaimResponse, error) {
+	var result RenewClaimResponse
+	err := c.call(ctx, ResourceRunClaim, TargetUpdateResource, RenewClaimRequest{RunID: claim.RunID, LeaseToken: claim.LeaseToken}, &result)
+	return result, err
+}
+
 // AppendEvents 租约 append（batchSeq 幂等，模糊重试安全）。
 func (c *Client) AppendEvents(ctx context.Context, request CreateEventsRequest) (CreateEventsResponse, error) {
 	var response CreateEventsResponse
 	err := c.call(ctx, ResourceEvent, TargetCreateResource, request, &response)
 	return response, err
-}
-
-// ListEvents 区间读取（触发区间与恢复现场共用）。
-func (c *Client) ListEvents(ctx context.Context, request ListEventsRequest) ([]Event, error) {
-	var events []Event
-	err := c.call(ctx, ResourceEvent, TargetListResources, request, &events)
-	return events, err
 }

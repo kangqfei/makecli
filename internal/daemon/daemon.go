@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/qfeius/makecli/internal/daemon/adapter"
@@ -52,10 +53,11 @@ type Daemon struct {
 	maxRunDuration time.Duration
 	logger         *slog.Logger
 
-	mu         sync.Mutex
-	activeRun  string             // 当前执行中的 run_id（空=空闲）
-	cancelRun  context.CancelFunc // 取消当前 run
-	wasCancled *bool              // 当前 run 的取消标记（executeRun 收尾判定用）
+	mu              sync.Mutex
+	activeRun       string             // 当前执行中的 run_id（空=空闲）
+	cancelRun       context.CancelFunc // 取消当前 run
+	wasCancled      *atomic.Bool       // 当前执行的取消标记
+	activeExecution string
 }
 
 // New 探测各 backend 可用性并构造 Daemon；一个可用 backend 都没有即报错。
@@ -159,9 +161,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 // launch 启动一个 run 的执行 goroutine 并登记取消入口。
 func (d *Daemon) launch(ctx context.Context, backend adapter.Backend, claim RunClaim) {
 	runCtx, cancel := context.WithCancel(ctx)
-	cancelled := false
+	var cancelled atomic.Bool
 	d.mu.Lock()
 	d.activeRun = claim.RunID
+	if claim.Execution != nil {
+		d.activeExecution = claim.Execution.Execution.ID
+	}
 	d.cancelRun = cancel
 	d.wasCancled = &cancelled
 	d.mu.Unlock()
@@ -171,6 +176,7 @@ func (d *Daemon) launch(ctx context.Context, backend adapter.Backend, claim RunC
 			cancel()
 			d.mu.Lock()
 			d.activeRun = ""
+			d.activeExecution = ""
 			d.cancelRun = nil
 			d.wasCancled = nil
 			d.mu.Unlock()
@@ -204,6 +210,9 @@ func (d *Daemon) heartbeatLoop(ctx context.Context) {
 				if action.Kind == "cancel_run" {
 					d.cancelActiveRun(action.RunID)
 				}
+				if action.Kind == "cancel_execution" {
+					d.cancelActiveExecution(action.ExecutionID)
+				}
 			}
 		}
 	}
@@ -217,6 +226,17 @@ func (d *Daemon) cancelActiveRun(runID string) {
 		return // 已结束或不是本设备的活（幂等忽略）
 	}
 	d.logger.Info("收到取消指令,终止执行", "run", runID)
-	*d.wasCancled = true
+	d.wasCancled.Store(true)
+	d.cancelRun()
+}
+
+func (d *Daemon) cancelActiveExecution(executionID string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.activeExecution != executionID || d.cancelRun == nil {
+		return
+	}
+	d.logger.Info("收到执行取消指令", "execution", executionID)
+	d.wasCancled.Store(true)
 	d.cancelRun()
 }

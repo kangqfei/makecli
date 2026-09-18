@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ type fakeGateway struct {
 	calls  []string
 	bodies map[string][]byte
 	server *httptest.Server
-	events []Event
+	blocks []ContextBlock
 }
 
 func newFakeGateway(t *testing.T) *fakeGateway {
@@ -48,8 +49,11 @@ func newFakeGateway(t *testing.T) *fakeGateway {
 		fake.mu.Unlock()
 
 		var data any = map[string]any{}
-		if target == TargetListResources {
-			data = fake.events
+		if r.URL.Path == PathPrefix+"/context-window" {
+			if r.Header.Get("X-Context-Execution-ID") == "" || r.Header.Get("X-Context-Lease-Token") == "" {
+				t.Error("window request missing execution authorization")
+			}
+			data = ContextPack{Blocks: fake.blocks}
 		}
 		if r.URL.Path == PathPrefix+"/"+ResourceEvent && target == TargetCreateResource {
 			data = CreateEventsResponse{Appended: 1}
@@ -91,17 +95,21 @@ func (b *stubBackend) Execute(_ context.Context, prompt string, opts adapter.Exe
 	return &adapter.Session{Messages: messages, Result: results}, nil
 }
 
-func userMessageEvent(seq int64, text string) Event {
-	payload, _ := json.Marshal(UserMessagePayload{Blocks: []Block{{Kind: "text", Text: text}}, EndUser: "user_1"})
-	return Event{Seq: seq, Type: "user_message", Payload: payload}
-}
-
 func testClaim() RunClaim {
-	return RunClaim{
+	claim := RunClaim{
 		RunID: "run_1", SessionID: "session_1", LeaseToken: "lease_1",
-		Agent:   AgentBundle{Name: "测试", Instructions: "你是测试 agent"},
-		Trigger: SeqRange{FromSeq: 0, ToSeq: 1},
+		Execution: &ExecutionClaim{},
+		Context:   &ContextExecution{Namespace: ContextNamespace{TenantID: "tenant", UserID: "agent_account", ProductKey: "product", AgentKey: "agent"}, SessionID: "session_1", TurnID: "turn_1"},
+		Agent:     AgentBundle{Name: "测试", Instructions: "你是测试 agent"},
+		Trigger:   SeqRange{FromSeq: 0, ToSeq: 1},
 	}
+	claim.Execution.Execution.ID = "execution_1"
+	claim.Execution.Execution.RunID = claim.RunID
+	claim.Execution.Lease.ExecutionID = "execution_1"
+	claim.Execution.Lease.WorkerID = "worker"
+	claim.Execution.Lease.Generation = 1
+	claim.Execution.Lease.Token = claim.LeaseToken
+	return claim
 }
 
 func newTestDaemon(t *testing.T, gatewayURL string) *Daemon {
@@ -170,7 +178,7 @@ func TestNewRejectsNodeKeyAndSetupKeyTogether(t *testing.T) {
 func TestExecuteRunHappyPath(t *testing.T) {
 	gateway := newFakeGateway(t)
 	defer gateway.server.Close()
-	gateway.events = []Event{userMessageEvent(0, "第一条"), userMessageEvent(1, "第二条")}
+	gateway.blocks = []ContextBlock{{Role: "user", Content: "第一条"}, {Role: "user", Content: "第二条"}}
 	backend := &stubBackend{
 		messages: []adapter.Message{
 			{Type: adapter.MessageThinking, Text: "想"},
@@ -181,17 +189,17 @@ func TestExecuteRunHappyPath(t *testing.T) {
 	}
 	daemonUnderTest := newTestDaemon(t, gateway.server.URL)
 
-	cancelled := false
+	var cancelled atomic.Bool
 	daemonUnderTest.executeRun(context.Background(), backend, testClaim(), &cancelled)
 
-	if backend.gotText != "第一条\n\n第二条" {
+	if backend.gotText != "[user]\n第一条\n\n[user]\n第二条" {
 		t.Fatalf("prompt = %q, want 触发区间合并", backend.gotText)
 	}
 	if backend.gotOpts.WorkDir == "" {
 		t.Fatal("应准备工作目录")
 	}
 	runUpdateKey := PathPrefix + "/" + ResourceRun + "|" + TargetUpdateResource
-	eventListKey := PathPrefix + "/" + ResourceEvent + "|" + TargetListResources
+	eventListKey := PathPrefix + "/context-window|" + TargetCreateResource
 	eventCreateKey := PathPrefix + "/" + ResourceEvent + "|" + TargetCreateResource
 	targets := gateway.targets()
 	// start(update) → list → append(执行事件+最终 message) → complete(update)
@@ -200,8 +208,8 @@ func TestExecuteRunHappyPath(t *testing.T) {
 	}
 	var complete UpdateRunRequest
 	_ = json.Unmarshal(gateway.bodies[runUpdateKey], &complete)
-	if complete.Status != RunStatusCompleted || complete.CLISessionID != "cli_new" || complete.WorkDir != backend.gotOpts.WorkDir {
-		t.Fatalf("complete = %+v, want status=completed 且连续性回写", complete)
+	if complete.Status != RunStatusCompleted || backend.gotOpts.ResumeSessionID != "" {
+		t.Fatalf("complete = %+v, execution must not persist cross-run continuity", complete)
 	}
 	var appended CreateEventsRequest
 	_ = json.Unmarshal(gateway.bodies[eventCreateKey], &appended)
@@ -219,11 +227,11 @@ func TestExecuteRunHappyPath(t *testing.T) {
 func TestExecuteRunFailureReportsCLICrash(t *testing.T) {
 	gateway := newFakeGateway(t)
 	defer gateway.server.Close()
-	gateway.events = []Event{userMessageEvent(0, "hi")}
+	gateway.blocks = []ContextBlock{{Role: "user", Content: "hi"}}
 	backend := &stubBackend{result: adapter.Result{IsError: true, ErrorMessage: "boom"}}
 	daemonUnderTest := newTestDaemon(t, gateway.server.URL)
 
-	cancelled := false
+	var cancelled atomic.Bool
 	daemonUnderTest.executeRun(context.Background(), backend, testClaim(), &cancelled)
 
 	runUpdateKey := PathPrefix + "/" + ResourceRun + "|" + TargetUpdateResource
@@ -237,11 +245,12 @@ func TestExecuteRunFailureReportsCLICrash(t *testing.T) {
 func TestExecuteRunCancelledFinalizesAsCancelled(t *testing.T) {
 	gateway := newFakeGateway(t)
 	defer gateway.server.Close()
-	gateway.events = []Event{userMessageEvent(0, "hi")}
+	gateway.blocks = []ContextBlock{{Role: "user", Content: "hi"}}
 	backend := &stubBackend{result: adapter.Result{IsError: true, ErrorMessage: "被杀"}}
 	daemonUnderTest := newTestDaemon(t, gateway.server.URL)
 
-	cancelled := true // 心跳 actions 已置位
+	var cancelled atomic.Bool
+	cancelled.Store(true) // 心跳 actions 已置位
 	daemonUnderTest.executeRun(context.Background(), backend, testClaim(), &cancelled)
 
 	runUpdateKey := PathPrefix + "/" + ResourceRun + "|" + TargetUpdateResource

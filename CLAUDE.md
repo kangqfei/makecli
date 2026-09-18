@@ -24,7 +24,7 @@ Go 1.25.8 + github.com/spf13/cobra + github.com/go-git/go-git/v5（app init/crea
 <root>
 
 - `main.go` - 程序入口，注入 cmd.SkillContentFS 后调用 cmd.Execute()
-- `embed.go` - go:embed 白名单嵌入 skills/ submodule 的 skills/*/SKILL.md + references/（scripts/ agents/ 不嵌入）；go:embed 不能引用包目录之外的路径，submodule 在仓库根故嵌入点落在根 main 包；embed_test.go 冒烟真实 FS
+- `embed.go` - go:embed 白名单嵌入 skills/ submodule 的 skills/*/SKILL.md + references/（scripts/ agents/ 不嵌入）；go:embed 不能引用包目录之外的路径，submodule 在仓库根故嵌入点落在根 main 包；embed_test.go 验证真实 FS 及 LF/CRLF 的合法 frontmatter
 
 </root>
 

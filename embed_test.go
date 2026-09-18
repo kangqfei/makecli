@@ -23,7 +23,7 @@ func TestPlatformSkillsFS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.HasPrefix(res.Content, []byte("---\n")) {
+	if !bytes.HasPrefix(res.Content, []byte("---\n")) && !bytes.HasPrefix(res.Content, []byte("---\r\n")) {
 		t.Fatalf("makeui SKILL.md lacks frontmatter: %q", res.Content[:min(len(res.Content), 40)])
 	}
 	refs, err := skillcontent.Read(fsys, "makeui/references")

@@ -19,6 +19,7 @@ const TargetHeader = "X-Make-Target"
 // 封闭六动词中 daemon 消费的三个（Make 平台规范：新能力 = 新资源域 × 六动词）。
 const (
 	TargetCreateResource = "MakeService.CreateResource"
+	TargetGetResource    = "MakeService.GetResource"
 	TargetUpdateResource = "MakeService.UpdateResource"
 	TargetListResources  = "MakeService.ListResources"
 )
@@ -71,29 +72,12 @@ type Block struct {
 	Target *MentionTarget `json:"target,omitempty"`
 }
 
-// Event 是事件 envelope（读取用）。
-type Event struct {
-	Seq       int64           `json:"seq"`
-	Branch    int16           `json:"branch"`
-	RunID     string          `json:"runID,omitempty"`
-	Type      string          `json:"type"`
-	Actor     Actor           `json:"actor"`
-	Payload   json.RawMessage `json:"payload,omitempty"`
-	CreatedAt time.Time       `json:"createdAt"`
-}
-
 // NewEvent 是待写入事件（append 用）。
 type NewEvent struct {
 	Type    string          `json:"type"`
 	Actor   Actor           `json:"actor"`
 	Payload json.RawMessage `json:"payload,omitempty"`
 	RunID   string          `json:"runID,omitempty"`
-}
-
-// UserMessagePayload 是 user_message 事件的 payload（prompt 构造用）。
-type UserMessagePayload struct {
-	Blocks  []Block `json:"blocks"`
-	EndUser string  `json:"endUser"`
 }
 
 // RuntimeCapability 是 runtime 探测到的一个 CLI 脑。
@@ -120,8 +104,9 @@ type UpdateRuntimeRequest struct {
 }
 
 type RuntimeAction struct {
-	Kind  string `json:"kind"` // v1 仅 cancel_run
-	RunID string `json:"runID,omitempty"`
+	Kind        string `json:"kind"` // v1 仅 cancel_run
+	RunID       string `json:"runID,omitempty"`
+	ExecutionID string `json:"executionId,omitempty"`
 }
 
 type UpdateRuntimeResponse struct {
@@ -131,29 +116,25 @@ type UpdateRuntimeResponse struct {
 
 // CreateRunClaimRequest —— runtime 身份来自 node key（gateway 注入 X-Runtime-ID），请求体不带 runtimeID。
 type CreateRunClaimRequest struct {
-	Capabilities []string `json:"capabilities"`
-	Max          int      `json:"max"`
+	ExecutionProtocolVersion string   `json:"executionProtocolVersion"`
+	Capabilities             []string `json:"capabilities"`
+	Max                      int      `json:"max"`
 }
 
 // AgentBundle 是 claim 下发的 agent 渲染包：Description 定义身份职责，
 // Instructions 定义具体执行要求，execenv 据此渲染工作目录。
 type AgentBundle struct {
-	Name         string          `json:"name"`
-	Description  string          `json:"description,omitempty"`
-	Instructions string          `json:"instructions"`
-	RunParams    json.RawMessage `json:"runParams,omitempty"`
+	Name         string            `json:"name"`
+	Description  string            `json:"description,omitempty"`
+	Instructions string            `json:"instructions"`
+	RunParams    json.RawMessage   `json:"runParams,omitempty"`
+	MCPServers   []json.RawMessage `json:"mcpServers,omitempty"`
 }
 
 // SeqRange 是触发事件区间 [FromSeq, ToSeq]。
 type SeqRange struct {
 	FromSeq int64 `json:"fromSeq"`
 	ToSeq   int64 `json:"toSeq"`
-}
-
-// ResumeState 是会话连续性状态。
-type ResumeState struct {
-	CLISessionID string `json:"cliSessionID,omitempty"`
-	WorkDir      string `json:"workDir,omitempty"`
 }
 
 // ChainState 是链的当前状态。
@@ -165,14 +146,62 @@ type ChainState struct {
 
 // RunClaim 是 claim 的单条结果。
 type RunClaim struct {
-	RunID        string      `json:"runID"`
-	SessionID    string      `json:"sessionID"`
-	LeaseToken   string      `json:"leaseToken"`
-	LeaseSeconds int         `json:"leaseSeconds"`
-	Agent        AgentBundle `json:"agent"`
-	Trigger      SeqRange    `json:"trigger"`
-	Resume       ResumeState `json:"resume"`
-	Chain        ChainState  `json:"chain"`
+	Execution         *ExecutionClaim   `json:"execution"`
+	Context           *ContextExecution `json:"context"`
+	ExecutionIdentity json.RawMessage   `json:"executionIdentity,omitempty"`
+	Initiator         *Actor            `json:"initiator,omitempty"`
+	RunID             string            `json:"runID"`
+	SessionID         string            `json:"sessionID"`
+	LeaseToken        string            `json:"leaseToken"`
+	LeaseSeconds      int               `json:"leaseSeconds"`
+	Agent             AgentBundle       `json:"agent"`
+	Trigger           SeqRange          `json:"trigger"`
+	Chain             ChainState        `json:"chain"`
+}
+
+type ExecutionClaim struct {
+	Execution struct {
+		ID    string `json:"id"`
+		RunID string `json:"runId"`
+	} `json:"execution"`
+	Lease struct {
+		ExecutionID string `json:"executionId"`
+		WorkerID    string `json:"workerId"`
+		Generation  int64  `json:"generation"`
+		Token       string `json:"token"`
+	} `json:"lease"`
+}
+
+type ContextNamespace struct {
+	TenantID   string `json:"tenantId"`
+	UserID     string `json:"userId"`
+	ProductKey string `json:"productKey"`
+	AgentKey   string `json:"agentKey"`
+}
+
+type ContextExecution struct {
+	Namespace ContextNamespace `json:"namespace"`
+	SessionID string           `json:"sessionId"`
+	TurnID    string           `json:"turnId"`
+}
+
+type ContextBlock struct {
+	Role    string  `json:"role"`
+	Content string  `json:"content"`
+	Parts   []Block `json:"parts,omitempty"`
+}
+
+type ContextPack struct {
+	Blocks []ContextBlock `json:"blocks"`
+}
+
+type RenewClaimRequest struct {
+	RunID      string `json:"runID"`
+	LeaseToken string `json:"leaseToken"`
+}
+type RenewClaimResponse struct {
+	LeaseExpiresAt  time.Time `json:"leaseExpiresAt"`
+	CancelRequested bool      `json:"cancelRequested"`
 }
 
 // Usage 是 CLI 上报的 token 计数（记录展示用，不参与计费）。
@@ -200,8 +229,6 @@ type UpdateRunRequest struct {
 	RunID         string `json:"runID"`
 	Status        string `json:"status"`
 	LeaseToken    string `json:"leaseToken,omitempty"`
-	CLISessionID  string `json:"cliSessionID,omitempty"`
-	WorkDir       string `json:"workDir,omitempty"`
 	Usage         *Usage `json:"usage,omitempty"`
 	FailureReason string `json:"failureReason,omitempty"`
 }
@@ -218,13 +245,4 @@ type CreateEventsRequest struct {
 type CreateEventsResponse struct {
 	Appended  int  `json:"appended"`
 	Duplicate bool `json:"duplicate,omitempty"`
-}
-
-// ListEventsRequest —— 区间读取；from/to 是事件资源域的专属参数（seq 游标语义）。
-type ListEventsRequest struct {
-	SessionID string `json:"sessionID"`
-	Branch    int16  `json:"branch"`
-	From      int64  `json:"from"`
-	To        int64  `json:"to,omitempty"`
-	Limit     int    `json:"limit,omitempty"`
 }

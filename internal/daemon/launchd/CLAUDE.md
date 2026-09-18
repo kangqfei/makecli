@@ -12,3 +12,5 @@ launchd.go: Label 常量、Config(BinaryPath/Args/Env/WorkingDir/LogPath)、Stat
 launchd_test.go: 渲染转义与读回往返、渲染确定性、Install/Stop/Uninstall/Restart 的 launchctl 调用序(enable 打头、stop 必带 disable、uninstall 必带 enable 收尾)与文件效果(stop 留 plist / uninstall 删)、disable 失败上抛、bootstrap 重试自愈与失败不 kickstart、Query 三态 + Disabled 识别(两种印法 + 别的 Label 不误伤);打桩 runLaunchctl + t.Setenv("HOME") 隔离,非 macOS 机器也能跑全路径
 
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+
+测试同时隔离 HOME 与 USERPROFILE，保证 Windows 的 os.UserHomeDir 也只写临时目录。

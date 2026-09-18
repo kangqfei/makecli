@@ -1,13 +1,15 @@
 /**
  * [INPUT]: 依赖 fmt、os、path/filepath、strings；协议类型来自 protocol.go
- * [OUTPUT]: 对外提供 PrepareWorkDir（工作目录定位/创建 + description 身份职责与 instructions 执行要求渲染为 CLI 原生上下文文件）与 BuildPrompt（触发区间事件 → prompt）
- * [POS]: internal/daemon 的执行环境层——v1 最小版：目录 + 上下文文件（bare-clone 仓库缓存与 worktree 随 v2）
+ * [OUTPUT]: 对外提供 PrepareWorkDir（工作目录定位/创建 + description 身份职责与 instructions 执行要求渲染为 CLI 原生上下文文件），每次执行独立隔离
+ * [POS]: internal/daemon 的执行环境层——租户/Execution/generation 的临时目录与本次身份文件
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
 package daemon
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,22 +17,16 @@ import (
 	"strings"
 )
 
-// PrepareWorkDir 定位（或创建）run 的工作目录并渲染 agent 身份与指令。
-// 连续性优先：claim 下发的 workDir 可用即沿用；不可用（跨设备/跨 OS 的
-// 遗留路径）则回退 baseDir 下按 session 建目录并报告 resumable=false——
-// 调用方须同时放弃 cliSessionID（CLI 会话是设备本地状态，目录都不在，
-// 会话必然也不在）。description 与 instructions 分栏渲染为 CLAUDE.md 与
-// AGENTS.md——两个 CLI 的原生发现路径都覆盖，呈现按 provider 适配的差异
-// 就止步于文件名。
-func PrepareWorkDir(baseDir string, claim RunClaim) (workDir string, resumable bool, err error) {
-	resumable = true
-	workDir = claim.Resume.WorkDir
-	if workDir == "" || os.MkdirAll(workDir, 0o755) != nil {
-		resumable = workDir == "" // 显式回退：resume 目录建不出来即放弃连续性
-		workDir = filepath.Join(baseDir, claim.SessionID)
+// PrepareWorkDir 为租户、Execution 和领取代次创建独立目录，平台输入不能指定宿主路径。
+func PrepareWorkDir(baseDir string, claim RunClaim) (workDir string, err error) {
+	if err := validateExecution(claim); err != nil {
+		return "", err
 	}
-	if err := os.MkdirAll(workDir, 0o755); err != nil {
-		return "", false, fmt.Errorf("create work dir: %w", err)
+	identity, _ := json.Marshal([]any{claim.Context.Namespace.TenantID, claim.Execution.Execution.ID, claim.Execution.Lease.Generation})
+	digest := sha256.Sum256(identity)
+	workDir = filepath.Join(baseDir, "executions", hex.EncodeToString(digest[:]))
+	if err := os.MkdirAll(workDir, 0o700); err != nil {
+		return "", fmt.Errorf("create work dir: %w", err)
 	}
 	description := strings.TrimSpace(claim.Agent.Description)
 	instructions := strings.TrimSpace(claim.Agent.Instructions)
@@ -43,53 +39,17 @@ func PrepareWorkDir(baseDir string, claim RunClaim) (workDir string, resumable b
 		if instructions != "" {
 			fmt.Fprintf(&content, "\n## 执行要求\n\n%s\n", instructions)
 		}
+		if len(claim.ExecutionIdentity) > 0 && json.Valid(claim.ExecutionIdentity) {
+			fmt.Fprintf(&content, "\n## 本次执行身份\n\n%s\n", claim.ExecutionIdentity)
+		}
+		if claim.Initiator != nil {
+			fmt.Fprintf(&content, "\n真实发起者：%s/%s。执行账户与发言人分别记录，不能把‘我’自动改写成执行账户。\n", claim.Initiator.Kind, claim.Initiator.ID)
+		}
 		for _, name := range []string{"CLAUDE.md", "AGENTS.md"} {
-			if err := os.WriteFile(filepath.Join(workDir, name), []byte(content.String()), 0o644); err != nil {
-				return "", false, fmt.Errorf("render %s: %w", name, err)
+			if err := os.WriteFile(filepath.Join(workDir, name), []byte(content.String()), 0o600); err != nil {
+				return "", fmt.Errorf("render %s: %w", name, err)
 			}
 		}
 	}
-	return workDir, resumable, nil
-}
-
-// BuildPrompt 把触发区间的 user_message 事件拼为 prompt 文本。
-// 合并语义在此兑现：claim 的 trigger 区间可能覆盖多条积压消息，一次带走。
-func BuildPrompt(events []Event) string {
-	var parts []string
-	for _, event := range events {
-		if event.Type != "user_message" {
-			continue
-		}
-		var payload UserMessagePayload
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			continue
-		}
-		text := renderBlocksText(payload.Blocks)
-		if text != "" {
-			parts = append(parts, text)
-		}
-	}
-	return strings.Join(parts, "\n\n")
-}
-
-// renderBlocksText 把内容块降级为纯文本（mention 以 @name 呈现）。
-func renderBlocksText(blocks []Block) string {
-	var parts []string
-	for _, block := range blocks {
-		switch block.Kind {
-		case "text":
-			if block.Text != "" {
-				parts = append(parts, block.Text)
-			}
-		case "mention":
-			if block.Text != "" {
-				parts = append(parts, "@"+block.Text)
-			}
-		case "image", "file":
-			if block.URL != "" {
-				parts = append(parts, block.URL)
-			}
-		}
-	}
-	return strings.TrimSpace(strings.Join(parts, " "))
+	return workDir, nil
 }
