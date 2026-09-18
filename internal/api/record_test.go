@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 internal/api 包内的 Client（包内白盒），encoding/json、errors、net/http、net/http/httptest、strings
- * [OUTPUT]: 覆盖 CreateRecord / GetRecord / UpdateRecord / UpdateRecordsBatch / DeleteRecords / ListRecords 的单元测试（含 409 唯一性冲突 → UniqueConstraintError）
+ * [OUTPUT]: 覆盖 CreateRecord / GetRecord / UpdateRecord / UpdateRecordsBatch / DeleteRecords / ListRecords / AggregateRecords 的单元测试（含 409 唯一性冲突 → UniqueConstraintError）
  * [POS]: internal/api record.go 的配套测试，用 httptest 隔离网络
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -376,6 +376,139 @@ func TestRecordList(t *testing.T) {
 		defer srv.Close()
 
 		if _, _, err := New(srv.URL, "test-token").ListRecords("myapp", "user", ListRecordOpts{Page: 1, Size: 10}); err == nil {
+			t.Fatal("expected error on API failure")
+		}
+	})
+}
+
+func TestRecordAggregate(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/data/v1/aggregate" {
+				t.Errorf("unexpected path: %s", r.URL.Path)
+			}
+			if r.Header.Get("X-Make-Target") != "MakeService.ListResources" {
+				t.Errorf("unexpected X-Make-Target: %s", r.Header.Get("X-Make-Target"))
+			}
+			var body struct {
+				AppKey          string           `json:"appKey"`
+				EntityKey       string           `json:"entityKey"`
+				Group           []map[string]any `json:"group"`
+				Aggregates      []map[string]any `json:"aggregates"`
+				Filter          map[string]any   `json:"filter"`
+				AggregateFilter map[string]any   `json:"aggregateFilter"`
+				Sort            []map[string]any `json:"sort"`
+				Pagination      map[string]any   `json:"pagination"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			if body.AppKey != "crm" || body.EntityKey != "order" {
+				t.Errorf("unexpected keys: %s/%s", body.AppKey, body.EntityKey)
+			}
+			// group：granularity/alias 按 omitempty 只在设置时出现
+			if len(body.Group) != 2 || body.Group[0]["fieldKey"] != "status" || body.Group[1]["granularity"] != "month" || body.Group[1]["alias"] != "month" {
+				t.Errorf("unexpected group: %v", body.Group)
+			}
+			if _, has := body.Group[0]["granularity"]; has {
+				t.Errorf("expected granularity omitted for plain group, got %v", body.Group[0])
+			}
+			// aggregates：count 不带 fieldKey
+			if len(body.Aggregates) != 2 || body.Aggregates[0]["aggregate"] != "count" || body.Aggregates[1]["fieldKey"] != "amount" {
+				t.Errorf("unexpected aggregates: %v", body.Aggregates)
+			}
+			if _, has := body.Aggregates[0]["fieldKey"]; has {
+				t.Errorf("expected fieldKey omitted for count, got %v", body.Aggregates[0])
+			}
+			if body.Filter["expression"] != "status != 'draft'" || body.AggregateFilter["expression"] != "totalAmount > 10000" {
+				t.Errorf("unexpected filters: %v / %v", body.Filter, body.AggregateFilter)
+			}
+			// sort 以 alias 引用指标时不发 fieldKey
+			if len(body.Sort) != 1 || body.Sort[0]["alias"] != "totalAmount" || body.Sort[0]["order"] != "desc" {
+				t.Errorf("unexpected sort: %v", body.Sort)
+			}
+			if _, has := body.Sort[0]["fieldKey"]; has {
+				t.Errorf("expected fieldKey omitted for alias sort, got %v", body.Sort[0])
+			}
+			if body.Pagination["page"] != float64(2) || body.Pagination["size"] != float64(5) {
+				t.Errorf("unexpected pagination: %v", body.Pagination)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code": 200, "msg": "Aggregate records success",
+				"data": []map[string]any{
+					{"status": map[string]any{"value": "completed", "label": "已完成"}, "orderCount": 128, "totalAmount": 125300.5},
+				},
+				"pagination": map[string]any{"page": 2, "size": 5, "total": 7},
+			})
+		}))
+		defer srv.Close()
+
+		rows, total, err := New(srv.URL, "test-token").AggregateRecords("crm", "order", AggregateOpts{
+			Group: []GroupField{
+				{FieldKey: "status"},
+				{FieldKey: "orderDate", Granularity: "month", Alias: "month"},
+			},
+			Aggregates: []AggregateField{
+				{Aggregate: "count", Alias: "orderCount"},
+				{FieldKey: "amount", Aggregate: "sum", Alias: "totalAmount"},
+			},
+			Filter:          "status != 'draft'",
+			AggregateFilter: "totalAmount > 10000",
+			Sort:            []SortField{{Alias: "totalAmount", Order: "desc"}},
+			Page:            2,
+			Size:            5,
+		})
+		if err != nil {
+			t.Fatalf("AggregateRecords: %v", err)
+		}
+		if total != 7 {
+			t.Errorf("expected total=7, got %d", total)
+		}
+		if len(rows) != 1 || rows[0]["orderCount"] != float64(128) {
+			t.Errorf("unexpected rows: %v", rows)
+		}
+	})
+
+	t.Run("without optional fields", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			for _, key := range []string{"group", "sort", "filter", "aggregateFilter"} {
+				if body[key] != nil {
+					t.Errorf("expected no %s in request body, got %v", key, body[key])
+				}
+			}
+			if body["aggregates"] == nil {
+				t.Error("expected aggregates in request body")
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code": 200, "msg": "ok",
+				"data":       []map[string]any{{"total": 42}},
+				"pagination": map[string]any{"total": 1},
+			})
+		}))
+		defer srv.Close()
+
+		rows, total, err := New(srv.URL, "test-token").AggregateRecords("crm", "order", AggregateOpts{
+			Aggregates: []AggregateField{{Aggregate: "count", Alias: "total"}},
+			Page:       1, Size: 10,
+		})
+		if err != nil {
+			t.Fatalf("AggregateRecords: %v", err)
+		}
+		if total != 1 || len(rows) != 1 {
+			t.Errorf("expected single global row, got rows=%d total=%d", len(rows), total)
+		}
+	})
+
+	t.Run("API error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{"code": 400, "msg": "alias required"})
+		}))
+		defer srv.Close()
+
+		_, _, err := New(srv.URL, "test-token").AggregateRecords("crm", "order", AggregateOpts{Page: 1, Size: 10})
+		if err == nil {
 			t.Fatal("expected error on API failure")
 		}
 	})
