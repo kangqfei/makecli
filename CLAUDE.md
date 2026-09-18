@@ -19,6 +19,8 @@ Go 1.25.8 + github.com/spf13/cobra + github.com/go-git/go-git/v5（app init/crea
 - `internal/skillcontent/` - 内嵌 skill 内容的读取层（`makecli skills read <skill>[/<path>]`，对齐 lark-cli skills read）：reader.go Read 作用于任意 fs.FS，解析目标 path 缺省 SKILL.md、目录则列一层、错误自带导航（未知 skill 附嵌入清单 / 未找到附顶层条目）；生产 FS 来自根包 embed.go 经 main.go 注入 cmd.SkillContentFS
 - `internal/notifier/` - 自动更新提示（读本地缓存零延迟判定写进程级 pending，过期或跨通道后台 goroutine 刷新后重写；两个消费者读同一份 pending：stderr 文本提示仅 TTY 且仅命令成功后置于末尾（对齐 gh）、`--output json` 顶层对象末尾追加 `_notice.update{current,latest,url,command,message}` 不问 TTY，对齐 lark-cli 让 agent 收到升级提示；三态开关 env MAKE_CLI_UPDATE_NOTIFIER > config [settings] > 默认开；按 [settings] channel 检查与提示，缓存带 channel 字段跨通道失效，beta.N 白名单拒 git-describe 伪版本）
 
+- `docs/` - 按需求维护中文 AI 变更记录；运行契约和模块职责继续以现有分层文档为准
+
 </directory>
 
 <root>

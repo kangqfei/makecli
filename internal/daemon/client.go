@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 bytes、context、encoding/json、fmt、io、net/http、time；协议类型来自 protocol.go
- * [OUTPUT]: 对外提供 Client（gateway 设备面 /v1/daemon/* 的类型化调用）与 APIError（信封错误还原）
+ * [OUTPUT]: gateway 设备面类型化调用、不可变的执行租户作用域与 APIError（信封错误还原）
  * [POS]: internal/daemon 的传输层——Bearer token 鉴权，POST + X-Make-Target + 信封解包；正确性建立在拉取式 claim 上，连接断开只影响延迟
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -30,14 +30,29 @@ func (e *APIError) Error() string {
 
 // Client 是 gateway 设备面的 HTTP client。
 type Client struct {
-	baseURL string
-	token   string
-	http    *http.Client
+	baseURL  string
+	token    string
+	http     *http.Client
+	tenantID string
 }
 
 // NewClient 构造 Client；baseURL 形如 https://gateway.example.com。
 func NewClient(baseURL, token string) *Client {
 	return &Client{baseURL: baseURL, token: token, http: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+}
+
+// forExecution 只复制本次执行的租户路由，共享连接池但不修改节点级 client。
+func (c *Client) forExecution(claim RunClaim) (*Client, error) {
+	if err := validateExecution(claim); err != nil {
+		return nil, err
+	}
+	tenantID := claim.Context.Namespace.TenantID
+	if c.tenantID != "" && c.tenantID != tenantID {
+		return nil, fmt.Errorf("执行租户与 client 作用域不一致")
+	}
+	scoped := *c
+	scoped.tenantID = tenantID
+	return &scoped, nil
 }
 
 // call 执行统一调用风格请求并解包信封。
@@ -61,6 +76,9 @@ func (c *Client) callWithHeaders(ctx context.Context, resource, target string, r
 		request.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	request.Header.Set(TargetHeader, target)
+	if c.tenantID != "" {
+		request.Header.Set("X-Tenant-ID", c.tenantID)
+	}
 	for name, values := range headers {
 		request.Header[name] = append([]string(nil), values...)
 	}
@@ -122,7 +140,11 @@ func (c *Client) UpdateRun(ctx context.Context, request UpdateRunRequest) error 
 
 func (c *Client) RenewClaim(ctx context.Context, claim RunClaim) (RenewClaimResponse, error) {
 	var result RenewClaimResponse
-	err := c.call(ctx, ResourceRunClaim, TargetUpdateResource, RenewClaimRequest{RunID: claim.RunID, LeaseToken: claim.LeaseToken}, &result)
+	scoped, err := c.forExecution(claim)
+	if err != nil {
+		return result, err
+	}
+	err = scoped.call(ctx, ResourceRunClaim, TargetUpdateResource, RenewClaimRequest{RunID: claim.RunID, LeaseToken: claim.LeaseToken}, &result)
 	return result, err
 }
 

@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 daemon.go/run.go/client.go/execenv.go 与 adapter 契约；net/http/httptest 模拟 gateway
- * [OUTPUT]: 对外提供执行编排回归——start→读触发→执行→事件上报→complete 的顺序与载荷、取消收尾、失败收尾
+ * [OUTPUT]: 授权窗口消费、事件批次确认与完成/取消/失败的执行编排回归
  * [POS]: internal/daemon 的测试面——对 gateway 打桩测编排，不依赖真实 CLI 与网络
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -56,7 +56,11 @@ func newFakeGateway(t *testing.T) *fakeGateway {
 			data = ContextPack{Blocks: fake.blocks}
 		}
 		if r.URL.Path == PathPrefix+"/"+ResourceEvent && target == TargetCreateResource {
-			data = CreateEventsResponse{Appended: 1}
+			var request CreateEventsRequest
+			if err := json.Unmarshal(body, &request); err != nil {
+				t.Error(err)
+			}
+			data = CreateEventsResponse{Appended: len(request.Events)}
 		}
 		dataJSON, _ := json.Marshal(data)
 		w.Header().Set("Content-Type", "application/json")

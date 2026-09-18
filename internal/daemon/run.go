@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 context、encoding/json、log/slog、time；协议与传输来自 protocol.go/client.go，执行契约来自 adapter 包，出站 mention 切分来自 mention.go
- * [OUTPUT]: 独立执行的 start → 授权窗口/续租/目录隔离 → CLI → 持久事实 → complete/fail/cancel
+ * [OUTPUT]: 执行租户限定的生命周期；只有执行仍有效且最终输出已确认持久化才报告完成
  * [POS]: internal/daemon 的执行编排——batch_seq 单调保证模糊重试不双写；中间文本映射为 status（最终答复才是 message，
  *        经 parseMentionBlocks 产出结构化 mention 块，message 事件在状态面物化出站投递并驱动互@）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -11,6 +11,8 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"sync/atomic"
 	"time"
@@ -28,13 +30,14 @@ const (
 // 心跳 actions 到达后由 daemon 调 cancel）；cancelled 标记决定收尾 reason。
 func (d *Daemon) executeRun(ctx context.Context, backend adapter.Backend, claim RunClaim, cancelled *atomic.Bool) {
 	logger := d.logger.With("run", claim.RunID, "session", claim.SessionID, "provider", backend.Provider())
-	if err := validateExecution(claim); err != nil {
+	client, err := d.client.forExecution(claim)
+	if err != nil {
 		logger.Warn("invalid execution claim", "err", err)
 		return
 	}
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
-	if err := d.client.UpdateRun(ctx, UpdateRunRequest{RunID: claim.RunID, Status: RunStatusRunning, LeaseToken: claim.LeaseToken}); err != nil {
+	if err := client.UpdateRun(ctx, UpdateRunRequest{RunID: claim.RunID, Status: RunStatusRunning, LeaseToken: claim.LeaseToken}); err != nil {
 		logger.Error("start run", "err", err)
 		return // start 失败不 FailRun：lease 可能已被回收，留给 sweeper 处置
 	}
@@ -43,8 +46,13 @@ func (d *Daemon) executeRun(ctx context.Context, backend adapter.Backend, claim 
 	defer func() { stop(); <-leaseDone }()
 
 	fail := func(status, reason, detail string) {
+		if cancelled.Load() {
+			status, reason = RunStatusCancelled, ""
+		} else if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			status, reason = RunStatusFailed, FailReasonTimeout
+		}
 		logger.Warn("run failed", "status", status, "reason", reason, "detail", detail)
-		if err := d.client.UpdateRun(context.WithoutCancel(ctx), UpdateRunRequest{
+		if err := client.UpdateRun(context.WithoutCancel(ctx), UpdateRunRequest{
 			RunID: claim.RunID, Status: status, LeaseToken: claim.LeaseToken, FailureReason: reason,
 		}); err != nil {
 			logger.Error("fail run receipt", "err", err)
@@ -55,7 +63,7 @@ func (d *Daemon) executeRun(ctx context.Context, backend adapter.Backend, claim 
 		fail(RunStatusFailed, FailReasonCLICrash, "当前设备适配器不支持平台下发的业务工具凭据，请选择支持该能力的运行服务")
 		return
 	}
-	pack, err := d.client.ReadContext(ctx, claim)
+	pack, err := client.ReadContext(ctx, claim)
 	if err != nil {
 		fail(RunStatusFailed, FailReasonCLICrash, "读取 Context 窗口失败")
 		return
@@ -81,7 +89,7 @@ func (d *Daemon) executeRun(ctx context.Context, backend adapter.Backend, claim 
 		return
 	}
 
-	reporter := &eventReporter{daemon: d, claim: claim, logger: logger, stop: stop}
+	reporter := &eventReporter{client: client, claim: claim, logger: logger, stop: stop}
 	for message := range session.Messages {
 		reporter.add(ctx, message)
 	}
@@ -98,10 +106,12 @@ func (d *Daemon) executeRun(ctx context.Context, backend adapter.Backend, claim 
 		fail(RunStatusCancelled, "", "")
 	case reporter.err != nil:
 		fail(RunStatusFailed, FailReasonCLICrash, "执行事实未能可靠保存")
-	case result.IsError && ctx.Err() != nil:
-		fail(RunStatusFailed, FailReasonTimeout, result.ErrorMessage)
+	case ctx.Err() != nil:
+		fail(RunStatusFailed, FailReasonCLICrash, "执行已停止，不能确认成功")
 	case result.IsError:
 		fail(RunStatusFailed, FailReasonCLICrash, result.ErrorMessage)
+	case !reporter.finalSaved:
+		fail(RunStatusFailed, FailReasonCLICrash, "CLI 未提供已持久化的最终答复")
 	default:
 		request := UpdateRunRequest{
 			RunID: claim.RunID, Status: RunStatusCompleted, LeaseToken: claim.LeaseToken,
@@ -114,7 +124,8 @@ func (d *Daemon) executeRun(ctx context.Context, backend adapter.Backend, claim 
 				CacheCreationTokens: result.Usage.CacheCreationTokens,
 			}
 		}
-		if err := d.client.UpdateRun(context.WithoutCancel(ctx), request); err != nil {
+		// 成功回执保持执行 ctx：检查之后发生的租约丢失也必须中止请求。
+		if err := client.UpdateRun(ctx, request); err != nil {
 			logger.Error("complete run", "err", err)
 			return
 		}
@@ -125,14 +136,15 @@ func (d *Daemon) executeRun(ctx context.Context, backend adapter.Backend, claim 
 // eventReporter 攒批上报当前 Execution 的事件，batch_seq 从 1 单调递增——
 // 服务端以此幂等吸收模糊重试，绝不双写。
 type eventReporter struct {
-	daemon   *Daemon
-	claim    RunClaim
-	logger   *slog.Logger
-	buffer   []NewEvent
-	batchSeq int64
-	lastSent time.Time
-	err      error
-	stop     context.CancelFunc
+	client     *Client
+	claim      RunClaim
+	logger     *slog.Logger
+	buffer     []NewEvent
+	batchSeq   int64
+	lastSent   time.Time
+	err        error
+	stop       context.CancelFunc
+	finalSaved bool
 }
 
 // add 归一并缓冲一条执行事件，满批或超时即冲刷。
@@ -191,6 +203,7 @@ func (r *eventReporter) finish(ctx context.Context, result adapter.Result) {
 		})
 	}
 	r.flush(ctx)
+	r.finalSaved = !result.IsError && result.Text != "" && r.err == nil
 }
 
 func (r *eventReporter) flush(ctx context.Context) {
@@ -199,12 +212,15 @@ func (r *eventReporter) flush(ctx context.Context) {
 	}
 	r.batchSeq++
 	// 收尾冲刷必须在取消后仍可达——用不承继取消的 ctx。
-	_, err := r.daemon.client.AppendEvents(context.WithoutCancel(ctx), CreateEventsRequest{
+	receipt, err := r.client.AppendEvents(context.WithoutCancel(ctx), CreateEventsRequest{
 		SessionID:  r.claim.SessionID,
 		LeaseToken: r.claim.LeaseToken,
 		BatchSeq:   r.batchSeq,
 		Events:     r.buffer,
 	})
+	if err == nil && !receipt.Duplicate && receipt.Appended != len(r.buffer) {
+		err = fmt.Errorf("事件持久化回执数量不一致")
+	}
 	if err != nil {
 		r.logger.Warn("append events failed", "batch_seq", r.batchSeq)
 		r.err = err
