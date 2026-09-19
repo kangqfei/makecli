@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 execenv.go 的 PrepareWorkDir/BuildPrompt
- * [OUTPUT]: 对外提供执行环境回归——工作目录连续性优先、description 身份职责与 instructions 执行要求双文件渲染、触发区间 prompt 合并
+ * [INPUT]: 依赖 execenv.go 的 PrepareWorkDir/BuildContextPrompt
+ * [OUTPUT]: 对外提供执行环境回归——租户/Execution/generation 隔离、description 身份职责与 instructions 执行要求双文件渲染、保留服务端窗口角色和当前问题
  * [POS]: internal/daemon 的 execenv 测试面
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -16,19 +16,17 @@ import (
 
 func TestPrepareWorkDirRendersInstructions(t *testing.T) {
 	base := t.TempDir()
-	claim := RunClaim{
-		SessionID: "session_1",
-		Agent: AgentBundle{
-			Name: "助手", Description: "SRE 专家，精通 Kubernetes 与云原生。",
-			Instructions: "永远说中文",
-		},
+	claim := testClaim()
+	claim.Agent = AgentBundle{
+		Name: "助手", Description: "SRE 专家，精通 Kubernetes 与云原生。",
+		Instructions: "永远说中文",
 	}
-	workDir, resumable, err := PrepareWorkDir(base, claim)
+	workDir, err := PrepareWorkDir(base, claim)
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if workDir != filepath.Join(base, "session_1") || !resumable {
-		t.Fatalf("workDir = %q resumable = %v", workDir, resumable)
+	if filepath.Dir(workDir) != filepath.Join(base, "executions") {
+		t.Fatalf("workDir = %q", workDir)
 	}
 	for _, name := range []string{"CLAUDE.md", "AGENTS.md"} {
 		content, err := os.ReadFile(filepath.Join(workDir, name))
@@ -44,11 +42,9 @@ func TestPrepareWorkDirRendersInstructions(t *testing.T) {
 
 func TestPrepareWorkDirRendersDescriptionWithoutInstructions(t *testing.T) {
 	base := t.TempDir()
-	claim := RunClaim{
-		SessionID: "session_description",
-		Agent:     AgentBundle{Name: "SRE", Description: "负责 k8s 运维。"},
-	}
-	workDir, _, err := PrepareWorkDir(base, claim)
+	claim := testClaim()
+	claim.Agent = AgentBundle{Name: "SRE", Description: "负责 k8s 运维。"}
+	workDir, err := PrepareWorkDir(base, claim)
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
@@ -61,46 +57,46 @@ func TestPrepareWorkDirRendersDescriptionWithoutInstructions(t *testing.T) {
 	}
 }
 
-func TestPrepareWorkDirPrefersResumeDir(t *testing.T) {
-	resumeDir := filepath.Join(t.TempDir(), "existing")
-	claim := RunClaim{SessionID: "session_1", Resume: ResumeState{WorkDir: resumeDir}}
-	workDir, resumable, err := PrepareWorkDir(t.TempDir(), claim)
-	if err != nil {
-		t.Fatalf("prepare: %v", err)
-	}
-	if workDir != resumeDir || !resumable {
-		t.Fatalf("连续性 workDir 应沿用: %q resumable=%v", workDir, resumable)
-	}
-}
-
-func TestPrepareWorkDirFallsBackOnUnusableResumeDir(t *testing.T) {
-	// 跨设备遗留路径（如另一台机器的 /Users/...）不可创建时回退新目录并放弃连续性。
+func TestPrepareWorkDirSeparatesTenantExecutionAndGeneration(t *testing.T) {
 	base := t.TempDir()
-	claim := RunClaim{SessionID: "session_1", Resume: ResumeState{WorkDir: "/nonexistent-root/child", CLISessionID: "cli_stale"}}
-	workDir, resumable, err := PrepareWorkDir(base, claim)
-	if err != nil {
-		t.Fatalf("prepare: %v", err)
+	claim := testClaim()
+	forbiddenDirectory := filepath.Join(t.TempDir(), "old")
+	legacy, _ := json.Marshal(map[string]any{"resume": map[string]string{"workDir": forbiddenDirectory, "cliSessionID": "old-thread"}})
+	if err := json.Unmarshal(legacy, &claim); err != nil {
+		t.Fatal(err)
 	}
-	if workDir != filepath.Join(base, "session_1") || resumable {
-		t.Fatalf("应回退新目录且 resumable=false: %q %v", workDir, resumable)
+	seen := map[string]bool{}
+	for index := range 4 {
+		if index == 1 {
+			claim.Execution.Lease.Generation++
+		}
+		if index == 2 {
+			claim.Execution.Execution.ID = "another_execution"
+			claim.Execution.Lease.ExecutionID = claim.Execution.Execution.ID
+		}
+		if index == 3 {
+			claim.Context.Namespace.TenantID = "another_tenant"
+		}
+		directory, err := PrepareWorkDir(base, claim)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seen[directory] || directory == forbiddenDirectory {
+			t.Fatal("execution workspace reused")
+		}
+		seen[directory] = true
 	}
 }
 
-func TestBuildPromptMergesTriggerRange(t *testing.T) {
-	payload := func(text string) []byte {
-		raw, _ := json.Marshal(UserMessagePayload{Blocks: []Block{
-			{Kind: "mention", Text: "助手"},
-			{Kind: "text", Text: text},
-		}})
-		return raw
+func TestContextPromptRejectsUnsupportedMedia(t *testing.T) {
+	if _, err := BuildContextPrompt(ContextPack{Blocks: []ContextBlock{{Role: "user", Parts: []Block{{Kind: "image"}}}}}); err == nil {
+		t.Fatal("image input silently became empty text")
 	}
-	events := []Event{
-		{Seq: 0, Type: "user_message", Payload: payload("先看这个")},
-		{Seq: 1, Type: "run_started"}, // 非 user_message 跳过
-		{Seq: 2, Type: "user_message", Payload: payload("再看那个")},
-	}
-	prompt := BuildPrompt(events)
-	if prompt != "@助手 先看这个\n\n@助手 再看那个" {
-		t.Fatalf("prompt = %q", prompt)
+}
+
+func TestContextPromptPreservesRolesAndCurrentQuestion(t *testing.T) {
+	prompt, err := BuildContextPrompt(ContextPack{Blocks: []ContextBlock{{Role: "context", Content: "有来源的背景"}, {Role: "assistant", Content: "过去的答复"}, {Role: "user", Content: "当前问题"}}})
+	if err != nil || prompt != "[context]\n有来源的背景\n\n[assistant]\n过去的答复\n\n[user]\n当前问题" {
+		t.Fatalf("context projection: %q %v", prompt, err)
 	}
 }
