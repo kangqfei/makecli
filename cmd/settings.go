@@ -22,7 +22,7 @@ import (
 
 // ---------------------------------- 键表 ----------------------------------
 
-// settingKey 描述一个 [settings] 全局键：取值校验、从 Settings 读原始值（"" = 未设置）、缺省值。
+// settingKey 描述一个 [settings] 全局键：取值校验、从 Settings 读原始值（"" = 未设置）、缺省值（"" = 无缺省，未设置就是未设置）。
 type settingKey struct {
 	name     string
 	validate func(string) error
@@ -53,6 +53,12 @@ var settingKeys = []settingKey{
 		validate: oneOf("channel", config.ChannelNames),
 		value:    func(s config.Settings) string { return s.Channel },
 		def:      config.DefaultChannel,
+	},
+	{
+		// 未设置即原有行为（skills 全量），故无缺省值：get 打空、list 显示 "-"
+		name:     "role",
+		validate: oneOf("role", config.RoleNames),
+		value:    func(s config.Settings) string { return s.Role },
 	},
 	{
 		name: "check-for-updates",
@@ -227,7 +233,7 @@ func runSettingsList(output string) error {
 	}
 	rows := make([][]string, len(views))
 	for i, v := range views {
-		rows[i] = []string{v.Key, v.Value, v.Source}
+		rows[i] = []string{v.Key, firstNonEmpty(v.Value, "-"), v.Source}
 	}
 	table := tablewriter.NewTable(os.Stdout)
 	table.Header("KEY", "VALUE", "SOURCE")

@@ -165,11 +165,17 @@ func runUpdateSpecific(cmd *cobra.Command, currentVersion, target string, force,
 }
 
 func runSkillSync(cmd *cobra.Command, version string, skipSkills bool) error {
-	renderSkillSyncStart(cmd.OutOrStdout(), skillsync.SkillsSource, skillsync.SkillsCommand())
+	// 同步范围随 [settings] role：user 只刷 makecli，developer 全量——用户在 skills install --role 里的选择不被冲掉
+	role, err := resolveRole()
+	if err != nil {
+		return err
+	}
+	renderSkillSyncStart(cmd.OutOrStdout(), skillsync.SkillsSource, skillsync.SyncCommand(role))
 
 	result, err := syncSkillsFunc(cmd.Context(), skillsync.Options{
 		Version: formatCurrentVersion(version),
 		Skip:    skipSkills,
+		Role:    role,
 	})
 	if err != nil {
 		return err

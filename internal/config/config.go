@@ -1,8 +1,8 @@
 /**
  * [INPUT]: 依赖 os、bufio、fmt、io、regexp、sort、strings、path/filepath；依赖 paths.go 的 Dir、settings.go 的 ValidateProfileName
- * [OUTPUT]: 对外提供 LoadConfig、SaveConfig、SetSetting、MigrateSettings、ConfigPath 函数，Config/ConfigProfile 类型；包内 updateSettings（[settings] read-modify-write 原语）、validateINIKey / validateINIValue（写路径 INI 注入防线，被 credentials.go 复用）
+ * [OUTPUT]: 对外提供 LoadConfig、SaveConfig、SetSetting、UnsetSetting、MigrateSettings、ConfigPath 函数，Config/ConfigProfile 类型；包内 updateSettings（[settings] read-modify-write 原语）、validateINIKey / validateINIValue（写路径 INI 注入防线，被 credentials.go 复用）
  * [POS]: internal/config 的 config 文件管理，读写 config 文件（默认 ~/.make/config，INI 格式）；
- *        [settings] 的两种写法（SetSetting 单键、MigrateSettings 旧键搬家）都经 updateSettings 一条路；
+ *        [settings] 的三种写法（SetSetting 单键、UnsetSetting 删键、MigrateSettings 旧键搬家）都经 updateSettings 一条路；
  *        所有落盘键值先过 validateINIKey/validateINIValue（拒换行与首尾空白，防止值注入伪造 section/键）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -178,6 +178,11 @@ func SaveConfig(cfg Config) error {
 // SetSetting 写入 [settings] 段的单个全局键，保留其余内容。
 func SetSetting(key, value string) error {
 	return updateSettings(func(settings map[string]string) { settings[key] = value })
+}
+
+// UnsetSetting 删除 [settings] 段的单个全局键（不存在即 no-op），保留其余内容。
+func UnsetSetting(key string) error {
+	return updateSettings(func(settings map[string]string) { delete(settings, key) })
 }
 
 // MigrateSettings 把 [settings] 里仍用旧名的键按 legacySettingKeys 搬到新键：

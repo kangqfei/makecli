@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 internal/config（Load/LoadConfig/LoadSettings/LookupContext）、internal/api（New/Option/WithDebug/DebugFormat/WithHeaders）、fmt、os、slices、strings；从 root.go 读取全局 Profile / AccessToken / MetaServerURL / Context / DebugMode，从 output.go 读取 resolvedOutput
- * [OUTPUT]: 对外提供 newClientFromProfile（变参 ...api.Option）/ newRepoClientFromProfile / debugOption（--debug × --output 合成 api.WithDebug）/ resolveAccessToken / accessTokenSource / metaServerURL / repoServerURL / resolveContext / contextName / resolveChannel 函数、withGateway helper、apiGatewayPath / EnvAccessToken / EnvMetaServerURL / EnvRepoServerURL / EnvContext 常量与 tokenSource 常量
+ * [OUTPUT]: 对外提供 newClientFromProfile（变参 ...api.Option）/ newRepoClientFromProfile / debugOption（--debug × --output 合成 api.WithDebug）/ resolveAccessToken / accessTokenSource / metaServerURL / repoServerURL / resolveContext / contextName / resolveChannel / resolveRole 函数、withGateway helper、apiGatewayPath / EnvAccessToken / EnvMetaServerURL / EnvRepoServerURL / EnvContext 常量与 tokenSource 常量
  * [POS]: cmd 模块的公共 helper，统一「全局命令行入参 → API 客户端」的构建逻辑——profile / token / server / context / debug 全部由 root PersistentFlag 注入，子命令零参数调用；
  *        newClientFromProfile 收 ...api.Option 变参，把每命令横切选项（如 WithDryRun）追加到基础选项之后，写命令按需注入；
  *        resolveAccessToken 是 token 取值链的唯一入口：--access-token flag > $MAKE_ACCESS_TOKEN > credentials[profile].access_token（resolveProfile / configure verify / whoami 共用，不允许第二条链）；
@@ -205,6 +205,23 @@ func resolveChannel() (string, error) {
 			settings.Channel, strings.Join(config.ChannelNames(), ", "))
 	}
 	return settings.Channel, nil
+}
+
+// resolveRole 收口角色解析：[settings] role，未设置返回空串（= 原有行为，skills 全量）。
+// 未知角色名报错（与 resolveChannel 同款），被 update 后置同步与 skills list 消费。
+func resolveRole() (string, error) {
+	settings, err := config.LoadSettings()
+	if err != nil {
+		return "", err
+	}
+	if settings.Role == "" {
+		return "", nil
+	}
+	if !slices.Contains(config.RoleNames(), settings.Role) {
+		return "", fmt.Errorf("unknown role '%s' in config, valid: %s",
+			settings.Role, strings.Join(config.RoleNames(), ", "))
+	}
+	return settings.Role, nil
 }
 
 // newClientFromProfile 构建指向 Meta/Data Server 的 API 客户端。

@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 context、os/exec、slices、strings、time
  * [OUTPUT]: 对外提供 Sync / Options / Result / SkillsCommand，执行 Make platform skills 默认同步
- * [POS]: internal/skillsync 的编排层，被 cmd/update.go 在二进制更新后调用；Skip 判断后前置 EnsureNpx 环境门禁（Skip 不要求 npx）；隔离 npx 副作用，update 每次刷新 skills；dedupSortedNames 去重排序按名清单，被 remove.go / install.go 复用
+ * [POS]: internal/skillsync 的编排层，被 cmd/update.go 在二进制更新后调用；同步命令按 Options.Role 经 role.go SyncCommand 派生（空 → --all，user → 按名）；Skip 判断后前置 EnsureNpx 环境门禁（Skip 不要求 npx）；隔离 npx 副作用，update 每次刷新 skills；dedupSortedNames 去重排序按名清单，被 remove.go / install.go 复用
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -30,6 +30,9 @@ const syncTimeout = 3 * time.Minute
 type Options struct {
 	Version string
 	Skip    bool
+	// Role 决定同步范围（RoleSkills）：空（未设置）→ 全量，user → 只装 makecli。
+	// update 后置同步按它分流，用户在 skills install --role 里的选择不会被冲回全量。
+	Role string
 }
 
 // Result 描述同步结果，供 cmd 层渲染用户可见输出。
@@ -63,7 +66,7 @@ func Sync(ctx context.Context, opts Options) (Result, error) {
 		Action:  ActionSynced,
 		Source:  SkillsSource,
 		Version: opts.Version,
-		Command: SkillsCommand(),
+		Command: SyncCommand(opts.Role),
 	}
 
 	if opts.Skip {

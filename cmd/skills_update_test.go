@@ -13,10 +13,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qfeius/makecli/internal/config"
 	"github.com/qfeius/makecli/internal/skillsync"
 )
 
 func TestSkillsUpdateRunsSync(t *testing.T) {
+	t.Setenv(config.EnvConfigDir, t.TempDir()) // 同步读 [settings] role，隔离本机配置
 	var gotOpts skillsync.Options
 	orig := syncSkillsFunc
 	syncSkillsFunc = func(ctx context.Context, opts skillsync.Options) (skillsync.Result, error) {

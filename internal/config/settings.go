@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 fmt、os、regexp、strconv；依赖 config.go 的 parseINISections、ConfigPath
  * [OUTPUT]: 对外提供 Settings 类型、LoadSettings、ValidateProfileName 函数；包内 settingsSection 常量、validProfileName 正则、legacySettingKeys 表
- * [POS]: internal/config 的全局设置读取，承载非 profile 相关的 [settings] 段（check-for-updates / context / channel）；
+ * [POS]: internal/config 的全局设置读取，承载非 profile 相关的 [settings] 段（check-for-updates / context / channel / role）；
  *        旧键（environment）只登记进 Settings.Legacy 不翻译——解析链不背历史包袱，迁移由 MigrateSettings（doctor）一次性完成；
  *        ValidateProfileName 同时承担 profile 名文法把关（保守文法 + 保留名），是所有写路径的 INI 注入第一道闸
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -52,6 +52,8 @@ type Settings struct {
 	Context string
 	// Channel 是发布通道名（stable/beta）；空串 = 未配置（调用方回退 DefaultChannel）
 	Channel string
+	// Role 是这台机器上的人的角色（目前只有 user）；空串 = 未配置 = 原有行为（skills 全量）
+	Role string
 	// Legacy 是文件里仍在用旧名的键（旧键 → 值）；非空即配置过期，调用方应指引 makecli doctor --fix
 	Legacy map[string]string
 }
@@ -87,6 +89,7 @@ func LoadSettings() (Settings, error) {
 		}
 		s.Context = kv["context"]
 		s.Channel = kv["channel"]
+		s.Role = kv["role"]
 		for old := range legacySettingKeys {
 			if v, ok := kv[old]; ok {
 				if s.Legacy == nil {

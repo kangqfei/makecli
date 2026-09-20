@@ -14,13 +14,57 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qfeius/makecli/internal/config"
 	"github.com/qfeius/makecli/internal/skillsync"
 	"github.com/spf13/cobra"
 )
 
+// TestRunSkillsListRoleUserFiltersAvailable 锁定 available 按角色名单过滤：
+// user 只关心 makecli，远端的 developer skills 不该被当成 more available。
+func TestRunSkillsListRoleUserFiltersAvailable(t *testing.T) {
+	stubListSkills(t, sampleInventory())
+	if err := config.SetSetting("role", config.RoleUser); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := runSkillsList(context.Background(), outputTable, false); err != nil {
+			t.Errorf("runSkillsList: %v", err)
+		}
+	})
+	if !strings.Contains(out, "2 installed, 1 outdated\n") || strings.Contains(out, "more available") {
+		t.Errorf("user role must not count developer skills as available:\n%s", out)
+	}
+
+	// 名单内未装的 skill 仍计入
+	inv := sampleInventory()
+	inv.Skills = append(inv.Skills, skillsync.SkillInfo{Name: "makecli", Status: skillsync.StatusNotInstalled})
+	stubListSkills(t, inv)
+	if err := config.SetSetting("role", config.RoleUser); err != nil {
+		t.Fatal(err)
+	}
+	out = captureStdout(t, func() { _ = runSkillsList(context.Background(), outputTable, false) })
+	if !strings.Contains(out, "(1 more available, --all to show)") {
+		t.Errorf("makecli is in the user list and must count as available:\n%s", out)
+	}
+}
+
+func TestRunSkillsListEmptyHintCarriesRole(t *testing.T) {
+	stubListSkills(t, skillsync.Inventory{})
+	if err := config.SetSetting("role", config.RoleUser); err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(t, func() { _ = runSkillsList(context.Background(), outputTable, false) })
+	if !strings.Contains(out, "makecli skills install --role user --yes") {
+		t.Errorf("empty state must guide with the configured role:\n%s", out)
+	}
+}
+
 // stubListSkills 打桩 listSkillsFunc 返回固定 Inventory。
 func stubListSkills(t *testing.T, inv skillsync.Inventory) {
 	t.Helper()
+	// list 读 [settings] role 决定 available 分母，隔离配置目录（缺省 developer = 全量）
+	t.Setenv(config.EnvConfigDir, t.TempDir())
 	orig := listSkillsFunc
 	listSkillsFunc = func(ctx context.Context) skillsync.Inventory { return inv }
 	t.Cleanup(func() { listSkillsFunc = orig })
@@ -140,7 +184,7 @@ func TestRunSkillsListEmpty(t *testing.T) {
 		t.Errorf("missing empty state:\n%s", out)
 	}
 	if !strings.Contains(out, "makecli skills install --all --yes") {
-		t.Errorf("empty state must guide installation:\n%s", out)
+		t.Errorf("empty state must guide installation (role unset → --all):\n%s", out)
 	}
 }
 

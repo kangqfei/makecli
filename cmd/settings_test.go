@@ -116,6 +116,7 @@ func TestSettingsGet(t *testing.T) {
 					t.Errorf("get %s: %v", k.name, err)
 				}
 			})
+			// role 无缺省：未设置就打空行
 			if strings.TrimSpace(out) != k.def {
 				t.Errorf("get %s = %q, want default %q", k.name, strings.TrimSpace(out), k.def)
 			}
@@ -153,9 +154,15 @@ func TestSettingsList(t *testing.T) {
 				t.Errorf("runSettingsList: %v", err)
 			}
 		})
-		for _, want := range []string{"KEY", "VALUE", "SOURCE", "context", "dev", "channel", "stable", "check-for-updates", "true"} {
+		for _, want := range []string{"KEY", "VALUE", "SOURCE", "context", "dev", "channel", "stable", "role", "check-for-updates", "true"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("table missing %q:\n%s", want, out)
+			}
+		}
+		// role 无缺省且未设置：VALUE 列显示占位 "-"
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, "role") && !strings.Contains(line, "-") {
+				t.Errorf("unset role should render '-' placeholder: %q", line)
 			}
 		}
 		if strings.Count(out, "config") != 1 || strings.Count(out, "default") != len(settingKeys)-1 {
@@ -204,7 +211,7 @@ func TestSettingsList(t *testing.T) {
 
 // TestSettingKeysRoundTrip 守护键表与 loader 一致：每个键 set 后 value() 必须原样读回（漏接字段即红灯）。
 func TestSettingKeysRoundTrip(t *testing.T) {
-	samples := map[string]string{"context": "test", "channel": "beta", "check-for-updates": "false"}
+	samples := map[string]string{"context": "test", "channel": "beta", "role": "user", "check-for-updates": "false"}
 	for _, k := range settingKeys {
 		sample, ok := samples[k.name]
 		if !ok {

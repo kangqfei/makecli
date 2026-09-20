@@ -100,7 +100,11 @@ func checkSetting(k settingKey) func() doctorResult {
 		}
 		v := k.value(s)
 		if v == "" {
-			return doctorResult{ok: true, msg: fmt.Sprintf("not set, defaults to %s", k.def)}
+			msg := "not set"
+			if k.def != "" {
+				msg += ", defaults to " + k.def
+			}
+			return doctorResult{ok: true, msg: msg}
 		}
 		if err := k.validate(v); err != nil {
 			return doctorResult{msg: fmt.Sprintf("%v — run: makecli settings set %s <value>", err, k.name)}

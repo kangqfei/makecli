@@ -42,6 +42,10 @@ func setApplyFunc(t *testing.T, f func(*update.Release) error) *bool {
 // setSyncSkillsSuccess 在测试期间打桩 skills 同步，避免真实执行 npx。
 func setSyncSkillsSuccess(t *testing.T) *[]skillsync.Options {
 	t.Helper()
+	// 后置同步读 [settings] role / channel，隔离配置目录不让本机 ~/.make/config 漏进来
+	if os.Getenv(config.EnvConfigDir) == "" {
+		t.Setenv(config.EnvConfigDir, t.TempDir())
+	}
 	var calls []skillsync.Options
 	old := syncSkillsFunc
 	syncSkillsFunc = func(_ context.Context, opts skillsync.Options) (skillsync.Result, error) {
@@ -57,7 +61,7 @@ func setSyncSkillsSuccess(t *testing.T) *[]skillsync.Options {
 			Reason:  reason,
 			Source:  skillsync.SkillsSource,
 			Version: opts.Version,
-			Command: skillsync.SkillsCommand(),
+			Command: skillsync.SyncCommand(opts.Role),
 		}, nil
 	}
 	t.Cleanup(func() { syncSkillsFunc = old })
@@ -152,7 +156,33 @@ func TestRunUpdate_NoArg_Upgrade(t *testing.T) {
 	}
 }
 
+// TestRunUpdate_SkillSyncFollowsRole 锁定 update 后置同步按 [settings] role 分流：
+// user 只刷 makecli（按名命令），不会把 skills install --role user 的选择冲回全量。
+func TestRunUpdate_SkillSyncFollowsRole(t *testing.T) {
+	t.Setenv(config.EnvConfigDir, t.TempDir())
+	if err := config.SetSetting("role", config.RoleUser); err != nil {
+		t.Fatal(err)
+	}
+	setBuildVersion(t, "0.3.4")
+	cleanup := mockReleaseServer(t, 0, update.Release{TagName: "v0.4.0"})
+	defer cleanup()
+	setApplyFunc(t, noopApply)
+	syncCalls := setSyncSkillsSuccess(t)
+	cmd, out := bufferedCmd()
+
+	if err := runUpdate(cmd, "", false, false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(*syncCalls) != 1 || (*syncCalls)[0].Role != config.RoleUser {
+		t.Fatalf("sync calls = %+v, want one call with Role=user", *syncCalls)
+	}
+	if !strings.Contains(out.String(), "Skills command: npx -y skills add qfeius/make-platform-skills -s makecli -a * -y --global") {
+		t.Fatalf("user role must sync by name:\n%s", out.String())
+	}
+}
+
 func TestRunUpdate_NoArg_UpgradeKeepsBinaryOutputAndAddsSkillsOutput(t *testing.T) {
+	t.Setenv(config.EnvConfigDir, t.TempDir()) // role 未配置 → 全量（原有行为）
 	setBuildVersion(t, "0.3.4-3-g5197914")
 	cleanup := mockReleaseServer(t, 0, update.Release{TagName: "v0.4.0"})
 	defer cleanup()

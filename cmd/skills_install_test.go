@@ -15,8 +15,121 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qfeius/makecli/internal/config"
 	"github.com/qfeius/makecli/internal/skillsync"
 )
+
+// settingsRole 读回 [settings] role（"" = 未写）
+func settingsRole(t *testing.T) string {
+	t.Helper()
+	s, err := config.LoadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s.Role
+}
+
+func TestSkillsInstallRoleUser(t *testing.T) {
+	plan := skillsync.InstallPlan{Names: []string{"makecli"}}
+	rec := stubSkillsInstall(t, plan, nil, nil, nil)
+
+	out, _, err := runInstallCmd("--role", "user", "-y")
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if rec.planAll || !slices.Equal(rec.planNames, []string{"makecli"}) {
+		t.Fatalf("user role must plan exactly makecli: names=%v all=%v", rec.planNames, rec.planAll)
+	}
+	if got := settingsRole(t); got != config.RoleUser {
+		t.Fatalf("[settings] role = %q, want user", got)
+	}
+	if !strings.Contains(out, "makecli skill installed.") {
+		t.Fatalf("missing success output:\n%s", out)
+	}
+}
+
+func TestSkillsInstallAllClearsRole(t *testing.T) {
+	rec := stubSkillsInstall(t, skillsync.InstallPlan{All: true}, nil, nil, nil)
+	if err := config.SetSetting("role", config.RoleUser); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runInstallCmd("--all", "-y"); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !rec.planAll || len(rec.planNames) != 0 {
+		t.Fatalf("expected full install, got names=%v all=%v", rec.planNames, rec.planAll)
+	}
+	if got := settingsRole(t); got != "" {
+		t.Fatalf("--all must clear [settings] role (back to full sync), got %q", got)
+	}
+}
+
+func TestSkillsInstallAllWithRoleRejected(t *testing.T) {
+	rec := stubSkillsInstall(t, skillsync.InstallPlan{}, nil, nil, nil)
+	_, _, err := runInstallCmd("--all", "--role", "user")
+	if err == nil || !strings.Contains(err.Error(), "cannot use --all with --role") {
+		t.Fatalf("expected mutual-exclusion error, got %v", err)
+	}
+	if rec.planCalls != 0 {
+		t.Fatalf("plan must not run, got %d calls", rec.planCalls)
+	}
+}
+
+func TestSkillsInstallByNameLeavesRoleAlone(t *testing.T) {
+	stubSkillsInstall(t, skillsync.InstallPlan{Names: []string{"makedsl"}}, nil, nil, nil)
+	if _, _, err := runInstallCmd("makedsl", "-y"); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if got := settingsRole(t); got != "" {
+		t.Fatalf("by-name install must not write role, got %q", got)
+	}
+}
+
+func TestSkillsInstallRoleValidation(t *testing.T) {
+	t.Run("unknown role rejected before plan", func(t *testing.T) {
+		rec := stubSkillsInstall(t, skillsync.InstallPlan{}, nil, nil, nil)
+		_, _, err := runInstallCmd("--role", "developer", "-y")
+		if err == nil || !strings.Contains(err.Error(), `unknown role "developer", valid: user`) {
+			t.Fatalf("expected unknown-role error listing valid roles, got %v", err)
+		}
+		if rec.planCalls != 0 || settingsRole(t) != "" {
+			t.Fatalf("invalid role must neither plan nor persist: plan=%d role=%q", rec.planCalls, settingsRole(t))
+		}
+	})
+
+	t.Run("role with names rejected", func(t *testing.T) {
+		rec := stubSkillsInstall(t, skillsync.InstallPlan{}, nil, nil, nil)
+		_, _, err := runInstallCmd("--role", "user", "makedsl")
+		if err == nil || !strings.Contains(err.Error(), "cannot use --all / --role with skill names") {
+			t.Fatalf("expected mutual-exclusion error, got %v", err)
+		}
+		if rec.planCalls != 0 {
+			t.Fatalf("plan must not run, got %d calls", rec.planCalls)
+		}
+	})
+}
+
+func TestSkillsInstallRolePersistsAfterConfirmBeforeInstall(t *testing.T) {
+	t.Run("declined confirm leaves role unset", func(t *testing.T) {
+		stubSkillsInstall(t, skillsync.InstallPlan{Names: []string{"makecli"}}, nil, errors.New("install cancelled"), nil)
+		if _, _, err := runInstallCmd("--role", "user"); err == nil {
+			t.Fatal("expected cancellation error")
+		}
+		if got := settingsRole(t); got != "" {
+			t.Fatalf("cancelled install must not persist role, got %q", got)
+		}
+	})
+
+	t.Run("failed install keeps role for the next update to heal", func(t *testing.T) {
+		stubSkillsInstall(t, skillsync.InstallPlan{Names: []string{"makecli"}}, nil, nil, errors.New("npx failed"))
+		if _, _, err := runInstallCmd("--role", "user", "-y"); err == nil {
+			t.Fatal("expected install error")
+		}
+		if got := settingsRole(t); got != config.RoleUser {
+			t.Fatalf("role must be persisted before install runs, got %q", got)
+		}
+	})
+}
 
 // installStubs 汇集三个打桩点的调用记录。
 type installStubs struct {
@@ -31,6 +144,8 @@ type installStubs struct {
 // stubSkillsInstall 打桩 planInstallFunc / confirmInstallFunc / installSkillsFunc。
 func stubSkillsInstall(t *testing.T, plan skillsync.InstallPlan, planErr, confirmErr, installErr error) *installStubs {
 	t.Helper()
+	// --role 会写 [settings] role，每个测试隔离配置目录
+	t.Setenv(config.EnvConfigDir, t.TempDir())
 	rec := &installStubs{}
 
 	origPlan := planInstallFunc
@@ -128,7 +243,7 @@ func TestSkillsInstallAllWithNamesRejected(t *testing.T) {
 	rec := stubSkillsInstall(t, skillsync.InstallPlan{}, nil, nil, nil)
 
 	_, _, err := runInstallCmd("--all", "makedsl")
-	if err == nil || !strings.Contains(err.Error(), "cannot use --all with skill names") {
+	if err == nil || !strings.Contains(err.Error(), "cannot use --all / --role with skill names") {
 		t.Fatalf("expected mutual-exclusion error, got: %v", err)
 	}
 	if rec.planCalls != 0 {

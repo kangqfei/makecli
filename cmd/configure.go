@@ -47,6 +47,9 @@ context = dev
 check-for-updates = true
 # Release channel for updates and the update notifier. One of: stable, beta
 channel = stable
+# Optional. role = user installs only the makecli skill (manage resources, no app development);
+# leave it unset to install every skill. Set with: makecli skills install --role user
+# role = user
 
 # ===== Profile: default (select another with --profile <name>) =====
 # These override the context preset and are optional - replace the
