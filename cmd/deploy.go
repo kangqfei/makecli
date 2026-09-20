@@ -80,7 +80,7 @@ func newDeployCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "deploy",
-		Short: "Deploy an app to Make Platform",
+		Short: "Deploy an app to Make beta environment",
 		Example: `  makecli app deploy                         # 默认部署到 beta
   makecli app deploy --wait                  # 部署并阻塞至构建终态（退出码 0 成功 / 2 失败 / 124 超时）
   makecli app deploy --env production        # 部署到 production（需确认）
