@@ -112,6 +112,7 @@ func Execute(version, buildDate string) error {
 	rootCmd.PersistentFlags().StringVar(&Context, "context", "", "backend context "+strings.Join(config.ContextNames(), "|")+" (overrides $"+EnvContext+" and [settings] context, default "+config.DefaultContext+")")
 	rootCmd.AddCommand(newVersionCmd(version, buildDate))
 	rootCmd.AddCommand(newConfigureCmd())
+	rootCmd.AddCommand(newSettingsCmd())
 	rootCmd.AddCommand(newContextCmd())
 	rootCmd.AddCommand(newDoctorCmd())
 	rootCmd.AddCommand(newLoginCmd())

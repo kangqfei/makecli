@@ -39,7 +39,7 @@ func newUpdateCmd() *cobra.Command {
   makecli update v0.2.0
   makecli update --force v0.0.1
   makecli update --skip-skills
-  makecli configure set channel beta   # make bare 'update' track pre-releases`,
+  makecli settings set channel beta    # make bare 'update' track pre-releases`,
 		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 doctor.go 的 runDoctor / errDoctorFailed / doctorFixHint；setProfile / setAccessTokenFlag / captureStdout 测试辅助；internal/config 隔离配置与凭证
- * [OUTPUT]: 覆盖 doctor 的单元测试（默认只读：旧键标 fixable 指引 --fix 且不改文件退出 1 / --fix 搬家到 context 且其后命令可用 / 健康配置 OK 退出 0 / 未知 context、channel 与缺 token 报问题退出 1 / --fix 修复后同轮 context 检查读到新键 / 哨兵静默 / --fix flag 注册）
+ * [INPUT]: 依赖 doctor.go 的 runDoctor / errDoctorFailed / doctorFixHint；setProfile / setAccessTokenFlag / captureStdout 测试辅助；internal/config 隔离配置与凭证；regexp
+ * [OUTPUT]: 覆盖 doctor 的单元测试（默认只读：旧键标 fixable 指引 --fix 且不改文件退出 1 / --fix 搬家到 context 且其后命令可用 / 健康配置 OK 退出 0 / 未知 context、channel 报 settings set 指引与缺 token 报问题退出 1 / --fix 修复后同轮 context 检查读到新键 / 哨兵静默 / --fix flag 注册）；squash + hasLine 让行断言不依赖名字列宽（列宽随最长检查名浮动）
  * [POS]: cmd 模块 doctor.go 的配套测试
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -10,11 +10,18 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/qfeius/makecli/internal/config"
 )
+
+// squash 把连续空格压成一个：doctor 的名字列按最长检查名对齐，断言不该依赖列宽。
+func squash(s string) string { return regexp.MustCompile(` {2,}`).ReplaceAllString(s, " ") }
+
+// hasLine 拼出 squash 后一行的期望形态："<mark> <name> <msg>"。
+func hasLine(mark, name, msg string) string { return mark + " " + name + " " + msg }
 
 // healthyDoctorEnv 准备一份健康的隔离配置：token 来自 flag（不读凭证文件），无旧键。
 func healthyDoctorEnv(t *testing.T) {
@@ -34,11 +41,11 @@ func TestDoctorReadOnlyByDefault(t *testing.T) {
 	}
 
 	var err error
-	out := captureStdout(t, func() { err = runDoctor(false) })
+	out := squash(captureStdout(t, func() { err = runDoctor(false) }))
 	if !errors.Is(err, errDoctorFailed) {
 		t.Fatalf("read-only doctor must report the fixable problem as failure, got %v\n%s", err, out)
 	}
-	for _, want := range []string{"✗ settings  outdated key(s): environment (fixable, run: " + doctorFixHint + ")", "FAIL: 1 problem left"} {
+	for _, want := range []string{hasLine("✗", "settings", "outdated key(s): environment (fixable, run: "+doctorFixHint+")"), "FAIL: 1 problem left"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
@@ -63,11 +70,11 @@ func TestDoctorFixMigratesLegacyEnvironment(t *testing.T) {
 	}
 
 	var err error
-	out := captureStdout(t, func() { err = runDoctor(true) })
+	out := squash(captureStdout(t, func() { err = runDoctor(true) }))
 	if err != nil {
 		t.Fatalf("runDoctor --fix: %v\n%s", err, out)
 	}
-	for _, want := range []string{"✗ settings  outdated key(s): environment", "✓ fixed     renamed [settings] environment → context", "✓ context   dev", "OK: configuration is healthy"} {
+	for _, want := range []string{hasLine("✗", "settings", "outdated key(s): environment"), hasLine("✓", "fixed", "renamed [settings] environment → context"), hasLine("✓", "context", "dev"), "OK: configuration is healthy"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
@@ -91,11 +98,11 @@ func TestDoctorHealthy(t *testing.T) {
 	for _, fix := range []bool{false, true} {
 		healthyDoctorEnv(t)
 		var err error
-		out := captureStdout(t, func() { err = runDoctor(fix) })
+		out := squash(captureStdout(t, func() { err = runDoctor(fix) }))
 		if err != nil {
 			t.Fatalf("runDoctor(fix=%v): %v\n%s", fix, err, out)
 		}
-		for _, want := range []string{"✓ settings", "✓ context   not set, defaults to production", "✓ channel   not set, defaults to stable", `✓ token     profile "default" (from flag)`, "OK: configuration is healthy"} {
+		for _, want := range []string{"✓ settings", hasLine("✓", "context", "not set, defaults to production"), hasLine("✓", "channel", "not set, defaults to stable"), hasLine("✓", "token", `profile "default" (from flag)`), "OK: configuration is healthy"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("fix=%v: output missing %q:\n%s", fix, want, out)
 			}
@@ -116,11 +123,11 @@ func TestDoctorReportsUnfixableProblems(t *testing.T) {
 			t.Fatal(err)
 		}
 		var err error
-		out := captureStdout(t, func() { err = runDoctor(true) })
+		out := squash(captureStdout(t, func() { err = runDoctor(true) }))
 		if !errors.Is(err, errDoctorFailed) {
 			t.Fatalf("expected errDoctorFailed, got %v", err)
 		}
-		for _, want := range []string{`✗ context   unknown context "staging"`, "makecli context use <name>", `✗ channel   unknown channel "nightly"`, "FAIL: 2 problems left"} {
+		for _, want := range []string{hasLine("✗", "context", `unknown context "staging"`), "makecli settings set context <value>", hasLine("✗", "channel", `unknown channel "nightly"`), "makecli settings set channel <value>", "FAIL: 2 problems left"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("output missing %q:\n%s", want, out)
 			}
@@ -135,11 +142,11 @@ func TestDoctorReportsUnfixableProblems(t *testing.T) {
 		setAccessTokenFlag(t, "")
 		setProfile(t, "work")
 		var err error
-		out := captureStdout(t, func() { err = runDoctor(false) })
+		out := squash(captureStdout(t, func() { err = runDoctor(false) }))
 		if !errors.Is(err, errDoctorFailed) {
 			t.Fatalf("expected errDoctorFailed, got %v", err)
 		}
-		if !strings.Contains(out, `✗ token     profile "work" has no access token — run: makecli login --profile work`) {
+		if !strings.Contains(out, hasLine("✗", "token", `profile "work" has no access token — run: makecli login --profile work`)) {
 			t.Errorf("output missing login guidance:\n%s", out)
 		}
 	})
@@ -151,11 +158,11 @@ func TestDoctorReportsUnfixableProblems(t *testing.T) {
 			t.Fatal(err)
 		}
 		var err error
-		out := captureStdout(t, func() { err = runDoctor(false) })
+		out := squash(captureStdout(t, func() { err = runDoctor(false) }))
 		if err != nil {
 			t.Fatalf("runDoctor: %v\n%s", err, out)
 		}
-		if !strings.Contains(out, `✓ token     profile "default" (from credentials)`) {
+		if !strings.Contains(out, hasLine("✓", "token", `profile "default" (from credentials)`)) {
 			t.Errorf("output missing credentials source:\n%s", out)
 		}
 	})
@@ -168,11 +175,11 @@ func TestDoctorFixLegacyValueStillValidated(t *testing.T) {
 		t.Fatal(err)
 	}
 	var err error
-	out := captureStdout(t, func() { err = runDoctor(true) })
+	out := squash(captureStdout(t, func() { err = runDoctor(true) }))
 	if !errors.Is(err, errDoctorFailed) {
 		t.Fatalf("expected errDoctorFailed, got %v", err)
 	}
-	for _, want := range []string{"✓ fixed     renamed [settings] environment → context", `✗ context   unknown context "staging"`} {
+	for _, want := range []string{hasLine("✓", "fixed", "renamed [settings] environment → context"), hasLine("✗", "context", `unknown context "staging"`)} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}

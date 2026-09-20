@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 依赖 internal/config（ConfigPath/LoadSettings/MigrateSettings/ContextNames/ChannelNames/DefaultContext/DefaultChannel）、cmd/client（resolveAccessToken/resolveContext/tokenSource 常量）、errors、fmt、slices、strings、github.com/spf13/cobra
- * [OUTPUT]: 对外提供 newDoctorCmd 函数、errDoctorFailed 哨兵错误、doctorFixHint 常量；包内 doctorChecks 检查表、runDoctor(fix) 白盒入口
- * [POS]: cmd 模块的 doctor 命令——本地配置体检，对齐 brew/flutter/npm doctor 的只读默认：检查表逐项求值，带 fix 的问题默认只标 fixable 并指引 --fix，
+ * [INPUT]: 依赖 internal/config（ConfigPath/LoadSettings/MigrateSettings）、cmd/settings（settingKeys 表）、cmd/client（resolveAccessToken/tokenSource 常量）、errors、fmt、strings、github.com/spf13/cobra
+ * [OUTPUT]: 对外提供 newDoctorCmd 函数、errDoctorFailed 哨兵错误、doctorFixHint 常量；包内 doctorChecks 检查表组装、checkSetting 按键生成检查、runDoctor(fix) 白盒入口
+ * [POS]: cmd 模块的 doctor 命令——本地配置体检，对齐 brew/flutter/npm doctor 的只读默认：检查表逐项求值（旧键搬家 → settingKeys 表逐键取值校验 → 凭证），带 fix 的问题默认只标 fixable 并指引 --fix，
  *        --fix 时当场修复并回显（[settings] 旧键 environment → context 由 config.MigrateSettings 搬家），修不了的问题给 next-step 指引；
  *        这是旧配置升级到新格式的唯一通道——解析链（resolveContext）遇到旧键只报错指引 doctor --fix，不背兼容包袱；存在未修复问题返回 errDoctorFailed（退出码 1）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -12,7 +12,6 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/qfeius/makecli/internal/config"
@@ -57,11 +56,13 @@ type doctorCheck struct {
 	run  func() doctorResult
 }
 
-var doctorChecks = []doctorCheck{
-	{"settings", checkLegacySettings},
-	{"context", checkContext},
-	{"channel", checkChannel},
-	{"token", checkToken},
+// doctorChecks 按序组装：旧键搬家先行，随后逐个全局键（settingKeys 表序，与 settings list 同序），最后凭证。
+func doctorChecks() []doctorCheck {
+	checks := []doctorCheck{{"settings", checkLegacySettings}}
+	for _, k := range settingKeys {
+		checks = append(checks, doctorCheck{k.name, checkSetting(k)})
+	}
+	return append(checks, doctorCheck{"token", checkToken})
 }
 
 // checkLegacySettings 发现 [settings] 仍用旧键即交 MigrateSettings 搬家。
@@ -89,34 +90,23 @@ func checkLegacySettings() doctorResult {
 	}
 }
 
-// checkContext 校验 [settings] context 的值；未配置即默认值，不算问题。
-func checkContext() doctorResult {
-	s, err := config.LoadSettings()
-	if err != nil {
-		return doctorResult{msg: err.Error()}
+// checkSetting 生成一个全局键的检查：未配置即默认值不算问题；配置了就过该键的 validate，
+// 不合法附 settings set 指引（值无法猜测，不提供 fix）。
+func checkSetting(k settingKey) func() doctorResult {
+	return func() doctorResult {
+		s, err := config.LoadSettings()
+		if err != nil {
+			return doctorResult{msg: err.Error()}
+		}
+		v := k.value(s)
+		if v == "" {
+			return doctorResult{ok: true, msg: fmt.Sprintf("not set, defaults to %s", k.def)}
+		}
+		if err := k.validate(v); err != nil {
+			return doctorResult{msg: fmt.Sprintf("%v — run: makecli settings set %s <value>", err, k.name)}
+		}
+		return doctorResult{ok: true, msg: v}
 	}
-	if s.Context == "" {
-		return doctorResult{ok: true, msg: fmt.Sprintf("not set, defaults to %s", config.DefaultContext)}
-	}
-	if !slices.Contains(config.ContextNames(), s.Context) {
-		return doctorResult{msg: fmt.Sprintf("unknown context %q, valid: %s — run: makecli context use <name>", s.Context, strings.Join(config.ContextNames(), ", "))}
-	}
-	return doctorResult{ok: true, msg: s.Context}
-}
-
-// checkChannel 校验 [settings] channel 的值；未配置即默认值，不算问题。
-func checkChannel() doctorResult {
-	s, err := config.LoadSettings()
-	if err != nil {
-		return doctorResult{msg: err.Error()}
-	}
-	if s.Channel == "" {
-		return doctorResult{ok: true, msg: fmt.Sprintf("not set, defaults to %s", config.DefaultChannel)}
-	}
-	if !slices.Contains(config.ChannelNames(), s.Channel) {
-		return doctorResult{msg: fmt.Sprintf("unknown channel %q, valid: %s — run: makecli configure set channel <name>", s.Channel, strings.Join(config.ChannelNames(), ", "))}
-	}
-	return doctorResult{ok: true, msg: s.Channel}
 }
 
 // checkToken 确认当前 profile 拿得到 access token（来源 flag/env/credentials 任一）。
@@ -144,29 +134,37 @@ func runDoctor(fix bool) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%-9s %s\n\n", "Config:", path)
+	fmt.Printf("Config: %s\n\n", path)
+
+	// 名字列按最长检查名对齐（settingKeys 里的键名长度不一，如 check-for-updates）
+	checks := doctorChecks()
+	width := 0
+	for _, c := range checks {
+		width = max(width, len(c.name))
+	}
+	line := func(mark, name, msg string) { fmt.Printf("%s %-*s %s\n", mark, width, name, msg) }
 
 	problems := 0
-	for _, c := range doctorChecks {
+	for _, c := range checks {
 		res := c.run()
 		switch {
 		case res.ok:
-			fmt.Printf("✓ %-9s %s\n", c.name, res.msg)
+			line("✓", c.name, res.msg)
 		case res.fix == nil:
 			problems++
-			fmt.Printf("✗ %-9s %s\n", c.name, res.msg)
+			line("✗", c.name, res.msg)
 		case !fix:
 			problems++
-			fmt.Printf("✗ %-9s %s (fixable, run: %s)\n", c.name, res.msg, doctorFixHint)
+			line("✗", c.name, res.msg+" (fixable, run: "+doctorFixHint+")")
 		default:
-			fmt.Printf("✗ %-9s %s\n", c.name, res.msg)
+			line("✗", c.name, res.msg)
 			done, err := res.fix()
 			if err != nil {
 				problems++
-				fmt.Printf("  %-9s fix failed: %v\n", "", err)
+				line(" ", "", "fix failed: "+err.Error())
 				continue
 			}
-			fmt.Printf("✓ %-9s %s\n", "fixed", done)
+			line("✓", "fixed", done)
 		}
 	}
 

@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 cmd 包内的 mask、validateJWT、validateConfigKey、sampleConfig（包内白盒）
- * [OUTPUT]: 覆盖凭证遮掩、JWT 校验、config key 校验、context set/get（含旧键 environment 已非法 key）、sample 模板完整性与真实 loader 有效性的单元测试
+ * [INPUT]: 依赖 cmd 包内的 mask、validateJWT、validateConfigKey、runConfigureSet/Get、settingKeyNames、sampleConfig（包内白盒）
+ * [OUTPUT]: 覆盖凭证遮掩、JWT 校验、config key 校验、全局键误投 configure 时拒绝并指路 settings 且不落盘、sample 模板完整性与真实 loader 有效性的单元测试
  * [POS]: cmd 模块 configure.go 的配套测试
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -86,97 +86,24 @@ func TestValidConfigKeys(t *testing.T) {
 	}
 }
 
-func TestConfigureSetContext(t *testing.T) {
-	t.Run("valid context writes to settings", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir())
-		if err := runConfigureSet("context", "test"); err != nil {
-			t.Fatalf("runConfigureSet: %v", err)
+// TestConfigureRejectsSettingKeys 守护 configure set/get 对全局键的拒绝并指路 settings（不静默转发）。
+func TestConfigureRejectsSettingKeys(t *testing.T) {
+	t.Setenv(config.EnvConfigDir, t.TempDir())
+	for _, key := range settingKeyNames() {
+		err := runConfigureSet(key, "x")
+		if err == nil || !strings.Contains(err.Error(), "makecli settings set "+key) {
+			t.Errorf("configure set %s: expected redirect to settings, got %v", key, err)
 		}
-		s, err := config.LoadSettings()
-		if err != nil {
-			t.Fatal(err)
+		err = runConfigureGet(key)
+		if err == nil || !strings.Contains(err.Error(), "makecli settings get "+key) {
+			t.Errorf("configure get %s: expected redirect to settings, got %v", key, err)
 		}
-		if s.Context != "test" {
-			t.Errorf("settings context = %q, want test", s.Context)
-		}
-	})
-
-	t.Run("invalid context rejected", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir())
-		if err := runConfigureSet("context", "staging"); err == nil {
-			t.Error("expected error for invalid context value")
-		}
-	})
-
-	t.Run("legacy environment key is no longer a config key", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir())
-		if err := runConfigureSet("environment", "test"); err == nil {
-			t.Error("expected unknown-key error for 'environment'")
-		}
-	})
-
-	t.Run("routes to settings regardless of --profile", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir())
-		setProfile(t, "test")
-		if err := runConfigureSet("context", "production"); err != nil {
-			t.Fatalf("runConfigureSet: %v", err)
-		}
-		s, _ := config.LoadSettings()
-		if s.Context != "production" {
-			t.Errorf("context not written to settings: %q", s.Context)
-		}
-	})
-}
-
-func TestConfigureSetGetChannel(t *testing.T) {
-	t.Run("set beta writes to settings", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir())
-		if err := runConfigureSet("channel", "beta"); err != nil {
-			t.Fatalf("runConfigureSet: %v", err)
-		}
-		s, err := config.LoadSettings()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if s.Channel != config.ChannelBeta {
-			t.Errorf("settings channel = %q, want beta", s.Channel)
-		}
-	})
-
-	t.Run("get prints configured channel", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir())
-		if err := runConfigureSet("channel", "beta"); err != nil {
-			t.Fatal(err)
-		}
-		out := captureStdout(t, func() {
-			if err := runConfigureGet("channel"); err != nil {
-				t.Errorf("runConfigureGet: %v", err)
-			}
-		})
-		if strings.TrimSpace(out) != "beta" {
-			t.Errorf("get channel = %q, want beta", strings.TrimSpace(out))
-		}
-	})
-
-	t.Run("get defaults to stable when unset", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir())
-		out := captureStdout(t, func() {
-			if err := runConfigureGet("channel"); err != nil {
-				t.Errorf("runConfigureGet: %v", err)
-			}
-		})
-		if strings.TrimSpace(out) != "stable" {
-			t.Errorf("get channel = %q, want stable (缺省回退)", strings.TrimSpace(out))
-		}
-	})
-
-	t.Run("unknown channel rejected", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir())
-		err := runConfigureSet("channel", "nightly")
-		if err == nil || !strings.Contains(err.Error(), "stable, beta") {
-			t.Fatalf("expected unknown-channel error listing valid names, got %v", err)
-		}
-	})
+	}
+	// 拒绝发生在写盘之前：settings 段不得被触碰
+	s, _ := config.LoadSettings()
+	if s.Context != "" || s.Channel != "" || s.CheckForUpdates != nil {
+		t.Errorf("configure must not write settings: %+v", s)
+	}
 }
 
 func TestReservedProfileName(t *testing.T) {
@@ -205,7 +132,7 @@ func TestSampleConfig(t *testing.T) {
 				t.Errorf("sampleConfig missing profile key %q", key)
 			}
 		}
-		for _, key := range []string{"context", "check-for-updates", "channel"} {
+		for _, key := range settingKeyNames() {
 			if !strings.Contains(sampleConfig, key) {
 				t.Errorf("sampleConfig missing settings key %q", key)
 			}
@@ -252,27 +179,6 @@ func TestSampleConfig(t *testing.T) {
 			if got == "" {
 				t.Errorf("sample default profile key %q parsed empty (commented out or malformed?)", name)
 			}
-		}
-	})
-}
-
-func TestConfigureGetContext(t *testing.T) {
-	t.Run("default production when unset", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir())
-		out := captureStdout(t, func() { _ = runConfigureGet("context") })
-		if strings.TrimSpace(out) != "production" {
-			t.Errorf("get context = %q, want production", strings.TrimSpace(out))
-		}
-	})
-
-	t.Run("reflects settings value", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir())
-		if err := config.SetSetting("context", "test"); err != nil {
-			t.Fatal(err)
-		}
-		out := captureStdout(t, func() { _ = runConfigureGet("context") })
-		if strings.TrimSpace(out) != "test" {
-			t.Errorf("get context = %q, want test", strings.TrimSpace(out))
 		}
 	})
 }

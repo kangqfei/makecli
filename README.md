@@ -39,14 +39,14 @@ makecli 有两个发布通道：
 ```bash
 # 切入 beta 通道：之后裸 update 与后台更新提示自动追踪 beta
 # （若出现更高的稳定版会自动收敛回稳定版）
-makecli configure set channel beta
+makecli settings set channel beta
 makecli update
 
 # 查看当前通道
-makecli configure get channel
+makecli settings get channel
 
 # 切回稳定通道；稳定版低于手上的 beta 时降级需 --force，或等更高稳定版自然收敛
-makecli configure set channel stable
+makecli settings set channel stable
 makecli update v0.5.5 --force
 
 # 不切通道，临时安装某个 beta 版本

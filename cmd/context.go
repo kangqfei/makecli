@@ -1,8 +1,8 @@
 /**
- * [INPUT]: 依赖 internal/config（ContextNames/LookupContext/DefaultContext）、cmd/client（resolveContext）、cmd/configure（setContext）、cmd/output（addOutputFlag/resolveOutputFormat/writeJSON）、fmt、os、github.com/olekukonko/tablewriter、github.com/spf13/cobra
+ * [INPUT]: 依赖 internal/config（ContextNames/LookupContext/DefaultContext）、cmd/client（resolveContext）、cmd/settings（setSetting）、cmd/output（addOutputFlag/resolveOutputFormat/writeJSON）、fmt、os、github.com/olekukonko/tablewriter、github.com/spf13/cobra
  * [OUTPUT]: 对外提供 newContextCmd 函数（含 list/use/show 子命令）；包内 runContextList / runContextUse / runContextShow 白盒入口
  * [POS]: cmd 模块的 context 命令组——后端 context（dev/test/production）的用户面，对标 docker context：list 列内置 preset 并标当前、use 持久化到 [settings] context、show 回显解析结果；
- *        context 是内置 preset 故无 create/rm，自定义地址仍走 profile 的 URL 覆盖键；解析链与写路径分别复用 client.go resolveContext 与 configure.go setContext，不另起炉灶
+ *        context 是内置 preset 故无 create/rm，自定义地址仍走 profile 的 URL 覆盖键；解析链与写路径分别复用 client.go resolveContext 与 settings.go setSetting，不另起炉灶
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -115,7 +115,7 @@ func runContextList(output string) error {
 func newContextUseCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "use <name>",
-		Short:        "Set the current context (writes [settings] context, shared by every profile)",
+		Short:        "Set the current context (same as: makecli settings set context <name>)",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -125,7 +125,7 @@ func newContextUseCmd() *cobra.Command {
 }
 
 func runContextUse(name string) error {
-	if err := setContext(name); err != nil {
+	if err := setSetting("context", name); err != nil {
 		return err
 	}
 	fmt.Printf("Switched to context %q.\n", name)
