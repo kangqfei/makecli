@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-// promoteMeta 是按路径 + X-Make-Target 路由的 Meta mock：GetApp 答已注册的 product app（配对 myapp_beta_），
+// promoteMeta 是按路径 + X-Make-Target 路由的 Meta mock：GetApp 答已注册的 prod app（配对 myapp_beta_），
 // 部署总览按 betaDeployed 答 preview 有/无，发布接口 CreateResource 记录 key 并回固定回执，StatusResource 按序答快照。
 type promoteMeta struct {
 	betaDeployed bool
@@ -65,7 +65,7 @@ func (m *promoteMeta) serve(t *testing.T) *httptest.Server {
 		default:
 			_ = json.NewEncoder(w).Encode(map[string]any{"code": 200, "msg": "ok", "data": map[string]any{
 				"key": "myapp", "name": "myapp", "type": "Make.App",
-				"meta": map[string]any{"appRole": "product", "pairAppKey": "myapp_beta_"},
+				"meta": map[string]any{"appRole": "prod", "pairAppKey": "myapp_beta_"},
 			}})
 		}
 	}))
@@ -208,7 +208,7 @@ func TestRunPromote(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{"code": 200, "msg": "ok", "data": map[string]any{
-				"key": "solo", "name": "solo", "type": "Make.App", "meta": map[string]any{"appRole": "product"}}})
+				"key": "solo", "name": "solo", "type": "Make.App", "meta": map[string]any{"appRole": "prod"}}})
 		}))
 		t.Cleanup(srv.Close)
 		stubMetaServer(t, srv.URL)

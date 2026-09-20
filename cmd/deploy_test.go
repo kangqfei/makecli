@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 cmd 包内的 runDeploy / runDeployStatus / pushCurrentHead / gitPushFunc / buildPollInterval / errBuildFailed / errWaitTimeout / initGitRepo / stageAndCommit（包内白盒）、enterAppDir(写 apps/dsl/app.yaml + chdir)、gitCommitAll(init+commit 当前目录)，encoding/json、errors、fmt、net/http、net/http/httptest、os、path/filepath、strings、testing、time、github.com/go-git/go-git/v5（及 plumbing/object 子包）
- * [OUTPUT]: 覆盖 deploy 子命令核心逻辑的单元测试（runDeploy 编排：本地真仓库门控 + Meta 注册门控（GetApp）+ production 确认门控 + gitPushFunc 桩隔离推送；app 未注册/校验错误/production abort 均短路在触达仓库服务之前且不 push；--yes 与 preview 不触发确认；非交互真门控拒绝 production 并指引 --yes；默认 env=preview；pushCurrentHead 真 go-git 推到本地裸仓库；fail-fast 脏/无仓库/无提交报错且不触网；--wait 等待：轮询至 SUCCESS/FAILED/CANCELED 终态、跃迁行去重、not-found 窗口期容忍、errBuildFailed/errWaitTimeout 哨兵、查询错误即刻失败、json 模式 stdout 纯 JSON 进度走 stderr；成功带出环境 URL：preview/production 按 task.Environment 选址、失败不渲染 URL、总览失败降级为空不阻断、json 平铺 url 字段、快照同路径；--output json 快照；旗标组合校验先于门控；默认 auto 无 --status 时落回 table 不报错）
- * [POS]: cmd 模块 deploy.go 的配套测试，用 httptest 隔离网络（newAppExistsMeta 放行注册门控、newBuildSeqMeta 按序答复构建快照模拟状态推进且兼答注册门控与部署总览 URL 夹具（previewURLFixture/productionURLFixture）、stubMetaServer 临时指向 Meta、newMockRepoServer 答仓库地址、noNetRepoServer 证短路不触网）、gitPushFunc 打桩隔离推送、stubPollInterval 调小轮询间隔、stubConfirmDeploy 打桩 confirmDeployFunc 隔离终端确认、临时裸仓库做本地 remote 验证真实 go-git 行为
+ * [OUTPUT]: 覆盖 deploy 子命令核心逻辑的单元测试（runDeploy 编排：本地真仓库门控 + Meta 注册门控（GetApp）+ gitPushFunc 桩隔离推送；app 未注册/校验错误均短路在触达仓库服务之前且不 push；裸 deploy 推到 beta 配对 app 仓库（无 --env）；pushCurrentHead 真 go-git 推到本地裸仓库；fail-fast 脏/无仓库/无提交报错且不触网；--wait 等待：轮询至 SUCCESS/FAILED/CANCELED 终态、跃迁行去重、not-found 窗口期容忍、errBuildFailed/errWaitTimeout 哨兵、查询错误即刻失败、json 模式 stdout 纯 JSON 进度走 stderr；成功带出环境 URL：preview/production 按 task.Environment 选址、失败不渲染 URL、总览失败降级为空不阻断、json 平铺 url 字段、快照同路径；--output json 快照；旗标组合校验先于门控；默认 auto 无 --status 时落回 table 不报错）
+ * [POS]: cmd 模块 deploy.go 的配套测试，用 httptest 隔离网络（newAppExistsMeta 放行注册门控、newBuildSeqMeta 按序答复构建快照模拟状态推进且兼答注册门控与部署总览 URL 夹具（previewURLFixture/productionURLFixture）、stubMetaServer 临时指向 Meta、newMockRepoServer 答仓库地址、noNetRepoServer 证短路不触网）、gitPushFunc 打桩隔离推送、stubPollInterval 调小轮询间隔、临时裸仓库做本地 remote 验证真实 go-git 行为
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -106,7 +106,7 @@ func newAppExistsMeta(t *testing.T) *httptest.Server {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"code": 200, "msg": "ok",
 			"data": map[string]any{"key": "myapp", "name": "myapp", "type": "Make.App",
-				"meta": map[string]any{"appRole": "product", "pairAppKey": "myapp_beta_"}},
+				"meta": map[string]any{"appRole": "prod", "pairAppKey": "myapp_beta_"}},
 		})
 	}))
 	t.Cleanup(srv.Close)
@@ -119,14 +119,6 @@ func stubMetaServer(t *testing.T, url string) {
 	old := MetaServerURL
 	MetaServerURL = url
 	t.Cleanup(func() { MetaServerURL = old })
-}
-
-// stubConfirmDeploy 临时替换 confirmDeployFunc，t.Cleanup 自动还原，隔离真实终端交互
-func stubConfirmDeploy(t *testing.T, err error) {
-	t.Helper()
-	orig := confirmDeployFunc
-	confirmDeployFunc = func(string) error { return err }
-	t.Cleanup(func() { confirmDeployFunc = orig })
 }
 
 // noNetRepoServer 启动一个被调用即令测试失败的仓库服务——证明 fail-fast 在网络之前短路。
@@ -160,7 +152,7 @@ func TestRunDeploy(t *testing.T) {
 		p := setupDeployEnv(t)
 
 		out := captureStdout(t, func() {
-			if err := runDeploy("beta", false, false); err != nil {
+			if err := runDeploy(false); err != nil {
 				t.Errorf("runDeploy: %v", err)
 			}
 		})
@@ -179,18 +171,15 @@ func TestRunDeploy(t *testing.T) {
 		}
 	})
 
-	t.Run("passes production env and force", func(t *testing.T) {
+	t.Run("passes force", func(t *testing.T) {
 		p := setupDeployEnv(t)
 
 		_ = captureStdout(t, func() {
-			if err := runDeploy("production", true, true); err != nil { // --yes 跳过确认
+			if err := runDeploy(true); err != nil {
 				t.Errorf("runDeploy: %v", err)
 			}
 		})
 
-		if p.cloneURL != "https://repo.example/org/myapp.git" {
-			t.Errorf("clone url = %q, want production repo", p.cloneURL)
-		}
 		if !p.force {
 			t.Errorf("force=%v, want true", p.force)
 		}
@@ -208,7 +197,7 @@ func TestRunDeploy(t *testing.T) {
 		p.install(t)
 
 		out := captureStdout(t, func() {
-			if err := runDeploy("beta", false, false); err != nil {
+			if err := runDeploy(false); err != nil {
 				t.Errorf("runDeploy: %v", err)
 			}
 		})
@@ -221,21 +210,10 @@ func TestRunDeploy(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects invalid env", func(t *testing.T) {
-		p := setupDeployEnv(t)
-
-		if err := runDeploy("staging", false, false); err == nil {
-			t.Fatal("expected error for invalid env")
-		}
-		if p.called {
-			t.Error("push should not run on invalid env")
-		}
-	})
-
 	t.Run("fails when app.yaml missing", func(t *testing.T) {
 		chdir(t, t.TempDir()) // 干净目录，无 apps/dsl/app.yaml
 
-		if err := runDeploy("beta", false, false); err == nil {
+		if err := runDeploy(false); err == nil {
 			t.Fatal("expected error when app.yaml is missing")
 		}
 	})
@@ -243,7 +221,7 @@ func TestRunDeploy(t *testing.T) {
 	t.Run("fails when app.yaml has invalid key", func(t *testing.T) {
 		enterAppDir(t, "_bad") // 下划线开头，validResourceKey 拒绝
 
-		if err := runDeploy("beta", false, false); err == nil {
+		if err := runDeploy(false); err == nil {
 			t.Fatal("expected error for invalid key in app.yaml")
 		}
 	})
@@ -256,7 +234,7 @@ func TestRunDeploy(t *testing.T) {
 		p := &pushCall{}
 		p.install(t)
 
-		err := runDeploy("beta", false, false)
+		err := runDeploy(false)
 		if err == nil {
 			t.Fatal("expected error when no git repository")
 		}
@@ -279,7 +257,7 @@ func TestRunDeploy(t *testing.T) {
 		p := &pushCall{}
 		p.install(t)
 
-		err := runDeploy("beta", false, false)
+		err := runDeploy(false)
 		if err == nil {
 			t.Fatal("expected error when nothing committed")
 		}
@@ -301,7 +279,7 @@ func TestRunDeploy(t *testing.T) {
 		p := &pushCall{}
 		p.install(t)
 
-		err := runDeploy("beta", false, false)
+		err := runDeploy(false)
 		if err == nil {
 			t.Fatal("expected error when working tree is dirty")
 		}
@@ -320,7 +298,7 @@ func TestRunDeploy(t *testing.T) {
 		p := &pushCall{}
 		p.install(t)
 
-		if err := runDeploy("beta", false, false); err == nil {
+		if err := runDeploy(false); err == nil {
 			t.Fatal("expected error for missing credentials")
 		}
 		if p.called {
@@ -340,7 +318,7 @@ func TestRunDeploy(t *testing.T) {
 		p := &pushCall{}
 		p.install(t)
 
-		err := runDeploy("beta", false, false)
+		err := runDeploy(false)
 		if err == nil {
 			t.Fatal("expected error when app is not registered")
 		}
@@ -364,7 +342,7 @@ func TestRunDeploy(t *testing.T) {
 		p := &pushCall{}
 		p.install(t)
 
-		err := runDeploy("beta", false, false)
+		err := runDeploy(false)
 		if err == nil {
 			t.Fatal("expected error when registration check fails")
 		}
@@ -387,7 +365,7 @@ func TestRunDeploy(t *testing.T) {
 		t.Setenv(EnvRepoServerURL, srv.URL)
 		(&pushCall{}).install(t)
 
-		if err := runDeploy("beta", false, false); err == nil {
+		if err := runDeploy(false); err == nil {
 			t.Fatal("expected error on API failure")
 		}
 	})
@@ -403,7 +381,7 @@ func TestRunDeploy(t *testing.T) {
 		t.Setenv(EnvRepoServerURL, srv.URL)
 		(&pushCall{}).install(t)
 
-		if err := runDeploy("beta", false, false); err == nil {
+		if err := runDeploy(false); err == nil {
 			t.Fatal("expected error when clone url missing")
 		}
 	})
@@ -413,119 +391,20 @@ func TestRunDeploy(t *testing.T) {
 		p.err = errors.New("push rejected")
 
 		var err error
-		_ = captureStdout(t, func() { err = runDeploy("beta", false, false) })
+		_ = captureStdout(t, func() { err = runDeploy(false) })
 		if err == nil {
 			t.Fatal("expected push error to propagate")
 		}
 	})
 }
 
-// ---------------------------------- production 部署确认门控 ----------------------------------
-
-func TestRunDeployProductionConfirm(t *testing.T) {
-	t.Run("deploys after confirmation succeeds", func(t *testing.T) {
-		p := setupDeployEnv(t)
-		stubConfirmDeploy(t, nil)
-
-		out := captureStdout(t, func() {
-			if err := runDeploy("production", false, false); err != nil {
-				t.Errorf("runDeploy: %v", err)
-			}
-		})
-		if p.cloneURL != "https://repo.example/org/myapp.git" {
-			t.Errorf("clone url = %q, want production repo", p.cloneURL)
-		}
-		if !strings.Contains(out, "Deployed 'myapp' to production") {
-			t.Errorf("output missing success line: %q", out)
-		}
-	})
-
-	t.Run("abort stops before repo prep and push", func(t *testing.T) {
-		enterAppDir(t, "myapp")
-		t.Setenv("HOME", t.TempDir())
-		saveDefaultToken(t)
-		gitCommitAll(t)
-		stubMetaServer(t, newAppExistsMeta(t).URL)
-		t.Setenv(EnvRepoServerURL, noNetRepoServer(t).URL) // 取消必须在触达仓库服务之前短路
-		p := &pushCall{}
-		p.install(t)
-		sentinel := errors.New("aborted")
-		stubConfirmDeploy(t, sentinel)
-
-		err := runDeploy("production", false, false)
-		if !errors.Is(err, sentinel) {
-			t.Fatalf("expected confirm error, got %v", err)
-		}
-		if p.called {
-			t.Error("push must not run when production deploy is aborted")
-		}
-	})
-
-	t.Run("--yes skips confirmation entirely", func(t *testing.T) {
-		p := setupDeployEnv(t)
-		orig := confirmDeployFunc
-		confirmDeployFunc = func(string) error {
-			t.Error("confirm must not run with --yes")
-			return nil
-		}
-		t.Cleanup(func() { confirmDeployFunc = orig })
-
-		if err := runDeploy("production", false, true); err != nil {
-			t.Errorf("runDeploy: %v", err)
-		}
-		if !p.called {
-			t.Error("expected push to run with --yes")
-		}
-	})
-
-	t.Run("beta never prompts", func(t *testing.T) {
-		p := setupDeployEnv(t)
-		orig := confirmDeployFunc
-		confirmDeployFunc = func(string) error {
-			t.Error("confirm must not run for beta")
-			return nil
-		}
-		t.Cleanup(func() { confirmDeployFunc = orig })
-
-		if err := runDeploy("beta", false, false); err != nil {
-			t.Errorf("runDeploy: %v", err)
-		}
-		if !p.called {
-			t.Error("expected beta push")
-		}
-	})
-
-	t.Run("real gate refuses production in non-interactive shell", func(t *testing.T) {
-		enterAppDir(t, "myapp")
-		t.Setenv("HOME", t.TempDir())
-		saveDefaultToken(t)
-		gitCommitAll(t)
-		stubMetaServer(t, newAppExistsMeta(t).URL)
-		t.Setenv(EnvRepoServerURL, noNetRepoServer(t).URL)
-		p := &pushCall{}
-		p.install(t)
-		// 不打桩 confirmDeployFunc，走真 confirmProductionDeploy；go test 下 stdin 非 TTY → 拒绝
-
-		err := runDeploy("production", false, false)
-		if err == nil {
-			t.Fatal("expected refusal without --yes in non-interactive shell")
-		}
-		if !strings.Contains(err.Error(), "--yes") {
-			t.Errorf("error should guide to --yes, got: %v", err)
-		}
-		if p.called {
-			t.Error("push must not run when production confirm is refused")
-		}
-	})
-}
-
-// TestDeployDefaultsToPreview 走真实 cobra 解析：不传 --env 时 `app deploy` 不报缺参，
-// 且默认部署目标是 beta（production 须显式 opt-in）。
-func TestDeployDefaultsToPreview(t *testing.T) {
+// TestDeployTargetsBeta 走真实 cobra 解析：裸 `app deploy` 推到 beta 配对 app 的仓库——
+// deploy 没有 --env，production 只能经 app promote 从 beta 发布。
+func TestDeployTargetsBeta(t *testing.T) {
 	p := setupDeployEnv(t)
 
 	cmd := newDeployCmd()
-	cmd.SetArgs([]string{}) // 不传 --env
+	cmd.SetArgs([]string{})
 	out := captureStdout(t, func() {
 		if err := cmd.Execute(); err != nil {
 			t.Errorf("bare `app deploy` should not error: %v", err)
@@ -533,7 +412,7 @@ func TestDeployDefaultsToPreview(t *testing.T) {
 	})
 
 	if p.cloneURL != "https://repo.example/org/myapp_beta_.git" {
-		t.Errorf("default deploy target = %q, want preview", p.cloneURL)
+		t.Errorf("deploy target = %q, want the beta pair app repo", p.cloneURL)
 	}
 	if !strings.Contains(out, "Deployed 'myapp' to beta") {
 		t.Errorf("output should confirm beta deploy, got: %q", out)
@@ -543,7 +422,7 @@ func TestDeployDefaultsToPreview(t *testing.T) {
 // ---------------------------------- pushCurrentHead 真实 go-git（本地裸仓库做 remote） ----------------------------------
 
 func TestPushCurrentHead(t *testing.T) {
-	t.Run("pushes committed HEAD to dev branch", func(t *testing.T) {
+	t.Run("pushes committed HEAD to main branch", func(t *testing.T) {
 		work := t.TempDir()
 		chdir(t, work)
 		t.Setenv("HOME", t.TempDir())
@@ -561,7 +440,7 @@ func TestPushCurrentHead(t *testing.T) {
 
 		tree := devTree(t, bare)
 		if _, err := tree.File("code.txt"); err != nil {
-			t.Errorf("code.txt not pushed to dev: %v", err)
+			t.Errorf("code.txt not pushed to main: %v", err)
 		}
 	})
 
@@ -853,7 +732,7 @@ func newBuildSeqMeta(t *testing.T, seq ...map[string]any) (*httptest.Server, *in
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"code": 200, "msg": "ok",
 				"data": map[string]any{"key": "myapp", "name": "myapp", "type": "Make.App",
-					"meta": map[string]any{"appRole": "product", "pairAppKey": "myapp_beta_"}},
+					"meta": map[string]any{"appRole": "prod", "pairAppKey": "myapp_beta_"}},
 			})
 		}
 	}))
@@ -1292,13 +1171,12 @@ func newCapturingRepoServer(t *testing.T, got *string) *httptest.Server {
 // TestDeployTargetsHostingApp 锁定「环境 → 承载 app」定位：仓库建在承载该环境的 app 名下
 func TestDeployTargetsHostingApp(t *testing.T) {
 	tests := []struct {
-		name, role, pair, env, wantRepoKey string
-		wantErr                            bool
+		name, role, pair, wantRepoKey string
+		wantErr                       bool
 	}{
-		{"product app 的 beta 环境挂在 pairAppKey", "product", "myapp_beta_", "beta", "myapp_beta_", false},
-		{"product app 的 production 就是自己", "product", "myapp_beta_", "production", "myapp", false},
-		{"beta app 的 beta 环境就是自己", "beta", "myapp", "beta", "myapp", false},
-		{"product app 无配对时 beta 报错且不触仓库", "product", "", "beta", "", true},
+		{"prod app 的 beta 环境挂在 pairAppKey", "prod", "myapp_beta_", "myapp_beta_", false},
+		{"beta app 的 beta 环境就是自己", "beta", "myapp", "myapp", false},
+		{"prod app 无配对时报错且不触仓库", "prod", "", "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1306,10 +1184,9 @@ func TestDeployTargetsHostingApp(t *testing.T) {
 			stubMetaServer(t, newMetaWithRole(t, tt.role, tt.pair).URL)
 			var repoKey string
 			t.Setenv(EnvRepoServerURL, newCapturingRepoServer(t, &repoKey).URL)
-			stubConfirmDeploy(t, nil)
 
 			var err error
-			_ = captureStdout(t, func() { err = runDeploy(tt.env, false, true) })
+			_ = captureStdout(t, func() { err = runDeploy(false) })
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
 			}

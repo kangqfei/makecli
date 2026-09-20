@@ -33,7 +33,7 @@ var AccessToken string
 
 // Context 全局后端 context 名（--context）。空串 = 回退 $MAKE_CLI_CONTEXT > [settings] context > config.DefaultContext。
 // 后端 URL 五件套由当前 context 的 config.Context preset 兜底（见 client.go resolveContext）。
-// 词汇约定：context 选 Make 后端（dev/test/production）；environment 只指 app 的部署环境（beta/production，app deploy/delete 的 --env）。
+// 词汇约定：context 选 Make 后端（dev/test/production）；environment 只指 app 的部署环境（beta/production：deploy 只推 beta、promote 发 production、delete 的 --env 选配对的哪一半）。
 var Context string
 
 var rootCmd = &cobra.Command{

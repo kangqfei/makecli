@@ -1,8 +1,8 @@
 /**
  * [INPUT]: 依赖 cmd/client（newClientFromProfile）、cmd/app（loadAppManifestFromFile）、errors、fmt、os、charm.land/huh/v2（交互确认表单）、github.com/mattn/go-isatty（TTY 检测）、github.com/spf13/cobra
  * [OUTPUT]: 对外提供 newAppDeleteCmd 函数；包内 resolveDeleteSteps（--env → 有序删除步骤）、betaPairKey（GetApp 读 meta.pairAppKey + appRole 校验）、deleteStep 类型、appRoleBeta/appRoleProduction/envAll 常量；包级 confirmDeleteFunc 可打桩变量（测试替换，参照 deploy.go gitPushFunc 模式）
- * [POS]: cmd/app 的 delete 子命令。每个 App 是 product/beta 一对（MetaAPIDesign.md：meta.appRole 标角色，meta.pairAppKey 指向配对 app，product 有 beta 配对时服务端 409 拒删），
- *        --env 必填（大小写不敏感）：production 删 <key> 本身；beta 先 GetApp(key) 校验 appRole=product 再取 pairAppKey 为目标——配对 key 以服务端为准，CLI 不硬编码派生规则；
+ * [POS]: cmd/app 的 delete 子命令。每个 App 是 prod/beta 一对（MetaAPIDesign.md：meta.appRole 标角色，meta.pairAppKey 指向配对 app，prod 有 beta 配对时服务端 409 拒删），
+ *        --env 必填（大小写不敏感）：production 删 <key> 本身；beta 先 GetApp(key) 校验 appRole=prod 再取 pairAppKey 为目标——配对 key 以服务端为准，CLI 不硬编码派生规则；
  *        all 展开为先 beta 后 production 的有序步骤（服务端要求先清 beta；无配对则只剩 production），逐步删除逐步提示。
  *        用户面只见「app key + 环境」：确认表单敲的是用户给的 app key（标题注明环境），成功提示同样不露配对 key（gh repo delete 同款，huh 表单实现），--yes 跳过；支持 -f 文件模式
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -22,8 +22,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// App 角色（MetaAPIDesign.md）：product 是客户交付的 app，beta 是开发自测的配对 app；
-// --env 取值用 production 对齐 deploy 的环境词汇，服务端 meta.appRole 对应值是 product
+// App 角色（MetaAPIDesign.md）：prod 是客户交付的 app，beta 是开发自测的配对 app；
+// --env 取值用 production 对齐 deploy 的环境词汇，服务端 meta.appRole 对应值是 prod
 const (
 	appRoleProduction = "production"
 	appRoleBeta       = "beta"
@@ -41,9 +41,9 @@ func newAppDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete [key] --env production|beta|ALL",
 		Short: "Delete an app on Make",
-		Long: `Delete one half of a Make app pair. Every app is created as a product/beta pair;
+		Long: `Delete one half of a Make app pair. Every app is created as a prod/beta pair;
 --env production deletes <key> itself, --env beta looks up the app and deletes its paired beta app,
---env ALL deletes beta first and then production (the server refuses to delete a product app
+--env ALL deletes beta first and then production (the server refuses to delete a prod app
 while its beta pair still exists).`,
 		Example: `  makecli app delete myapp --env beta
   makecli app delete myapp --env production --yes
@@ -80,20 +80,20 @@ func runAppDeleteFromFile(path, env string, skipConfirm bool) error {
 // deleteStep 是一次实际删除：target 是发给服务端的 key，env 是用户面的环境名
 type deleteStep struct{ target, env string }
 
-// betaPairKey 以服务端为准取 product app 的配对 beta key，并校验角色是 product——
-// 否则把 beta key 传进来会顺着 pairAppKey 反删 product。无配对返回空串，由调用方按 env 语义决定是否报错
+// betaPairKey 以服务端为准取 prod app 的配对 beta key，并校验角色是 prod——
+// 否则把 beta key 传进来会顺着 pairAppKey 反删 prod。无配对返回空串，由调用方按 env 语义决定是否报错
 func betaPairKey(client *api.Client, key string) (string, error) {
 	app, err := client.GetApp(key)
 	if err != nil {
 		return "", err
 	}
-	if app.Role() != api.RoleProduct {
-		return "", fmt.Errorf("%q is a %s app, not a product app: pass the product key instead", key, app.Role())
+	if app.Role() != api.RoleProd {
+		return "", fmt.Errorf("%q is a %s app, not a prod app: pass the prod key instead", key, app.Role())
 	}
 	return app.PairAppKey(), nil
 }
 
-// resolveDeleteSteps 把「product key + --env」展开成有序删除步骤：
+// resolveDeleteSteps 把「prod key + --env」展开成有序删除步骤：
 // production 只删 <key>；beta 只删配对 app（无配对报错）；all 先 beta 后 production（服务端要求先清 beta，无配对则只剩 production）
 func resolveDeleteSteps(client *api.Client, key, env string) ([]deleteStep, error) {
 	switch env {

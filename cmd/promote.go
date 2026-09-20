@@ -1,9 +1,9 @@
 /**
- * [INPUT]: 依赖 cmd/client（newClientFromProfile/resolveContext）、cmd/deploy（appKeyFromDSL/assertAppRegistered/confirmProductionAction/envURLFor/errWaitTimeout/buildPollInterval/shortSha）、cmd/output（resolveOutputFormat/writeJSON/addOutputFlag）、internal/api（PromoteApp/GetPromoteStatus/PromoteRun/PromoteStatus/GetDeploymentOverview/EnvBeta/EnvProduction/ErrNotFound）、internal/config（Dir）、encoding/json、errors、fmt、io、os、path/filepath、time、github.com/spf13/cobra
- * [OUTPUT]: 对外提供 newPromoteCmd 函数；包内 runPromote / runPromoteStatus（发起发布 / 查进度两条主路径）、promoteTarget + resolvePromoteTarget（app.yaml → 已注册 App → beta/product 双 key 定位）、waitAndRenderPromote / waitForPromote / renderPromoteResult / renderPromoteStatus（等待与渲染）、promoteReceipt / promoteStatusView（JSON 视图）、promoteRunRecord + savePromoteRun / loadPromoteRun / promoteRunPath（本地 run 记录）、errPromoteFailed 退出码哨兵（errors.go ExitCode 翻译为 2）、defaultPromoteTimeout 常量；包级 confirmPromoteFunc 可打桩变量
+ * [INPUT]: 依赖 cmd/client（newClientFromProfile/resolveContext）、cmd/deploy（appKeyFromDSL/assertAppRegistered/envURLFor/errWaitTimeout/buildPollInterval/shortSha）、cmd/output（resolveOutputFormat/writeJSON/addOutputFlag）、internal/api（PromoteApp/GetPromoteStatus/PromoteRun/PromoteStatus/GetDeploymentOverview/EnvBeta/EnvProduction/ErrNotFound）、internal/config（Dir）、encoding/json、errors、fmt、io、os、path/filepath、time、charm.land/huh/v2（production 确认表单）、github.com/mattn/go-isatty（TTY 检测）、github.com/spf13/cobra
+ * [OUTPUT]: 对外提供 newPromoteCmd 函数；包内 runPromote / runPromoteStatus（发起发布 / 查进度两条主路径）、promoteTarget + resolvePromoteTarget（app.yaml → 已注册 App → beta/prod 双 key 定位）、waitAndRenderPromote / waitForPromote / renderPromoteResult / renderPromoteStatus（等待与渲染）、promoteReceipt / promoteStatusView（JSON 视图）、promoteRunRecord + savePromoteRun / loadPromoteRun / promoteRunPath（本地 run 记录）、errPromoteFailed 退出码哨兵（errors.go ExitCode 翻译为 2）、defaultPromoteTimeout 常量、confirmProductionPromote（production 确认护栏：huh confirm + go-isatty，非交互拒绝并指引 --yes）；包级 confirmPromoteFunc 可打桩变量
  * [POS]: cmd 模块 app 命令组的 promote 子命令——对标 vercel promote：把 beta 环境当前生效的版本发布到 production，
  *        输入是服务端的 beta 状态而非本地代码（不 push、不读本地 git），「先 beta 后 production」因此是结构约束而非校验分支。
- *        流程：app.yaml 取 key → assertAppRegistered → KeyForEnv 定位 beta/product 两个 app → 部署总览取 beta 当前 commit
+ *        流程：app.yaml 取 key → assertAppRegistered → KeyForEnv 定位 beta/prod 两个 app → 部署总览取 beta 当前 commit
  *        做来源摘要（beta 从未部署即 fail-fast；总览查询失败降级为 unknown 交服务端裁决）→ production 确认（--yes 跳过，
  *        非交互拒绝）→ api.PromoteApp 发起（服务端 Temporal 异步流程，回执 workflowId+runId）→ 回执落盘
  *        <config.Dir>/promote/<context>--<betaKey>.json（runId 每次不同、查进度必须同传，落盘后 --status 免抄 ID；
@@ -25,12 +25,14 @@ import (
 	"path/filepath"
 	"time"
 
+	"charm.land/huh/v2"
+	"github.com/mattn/go-isatty"
 	"github.com/qfeius/makecli/internal/api"
 	"github.com/qfeius/makecli/internal/config"
 	"github.com/spf13/cobra"
 )
 
-// confirmPromoteFunc 为包级可打桩变量（测试替换终端确认），参照 deploy.go confirmDeployFunc 模式
+// confirmPromoteFunc 为包级可打桩变量（测试替换终端确认），参照 app_delete.go confirmDeleteFunc 模式
 var confirmPromoteFunc = confirmProductionPromote
 
 // errPromoteFailed 是 --wait 等到非成功终态的退出码哨兵（main 经 ExitCode 翻译为 2）
@@ -89,13 +91,13 @@ asynchronously on the server; --wait blocks until it reaches a terminal state.`,
 
 // promoteTarget 是一次 promote 的定位结果：app.yaml 里的 key 与配对中承载两个环境的 app key。
 type promoteTarget struct {
-	appKey     string
-	betaKey    string
-	productKey string
-	context    string
+	appKey  string
+	betaKey string
+	prodKey string
+	context string
 }
 
-// resolvePromoteTarget 从 app.yaml 取 key，经 Meta 注册门控后按配对信息定位 beta 与 product 两个 app。
+// resolvePromoteTarget 从 app.yaml 取 key，经 Meta 注册门控后按配对信息定位 beta 与 prod 两个 app。
 // 无 beta 环境（未配对）给可操作错误：promote 的输入就是 beta，没有 beta 就无从发布。
 func resolvePromoteTarget() (*promoteTarget, error) {
 	appKey, err := appKeyFromDSL()
@@ -110,7 +112,7 @@ func resolvePromoteTarget() (*promoteTarget, error) {
 	if err != nil {
 		return nil, fmt.Errorf("app '%s' 没有 beta 环境，请先在 Make Console 创建 Beta 环境并 makecli app deploy", appKey)
 	}
-	productKey, err := app.KeyForEnv(api.EnvProduction)
+	prodKey, err := app.KeyForEnv(api.EnvProduction)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +120,7 @@ func resolvePromoteTarget() (*promoteTarget, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &promoteTarget{appKey: appKey, betaKey: betaKey, productKey: productKey, context: ctx}, nil
+	return &promoteTarget{appKey: appKey, betaKey: betaKey, prodKey: prodKey, context: ctx}, nil
 }
 
 // promoteReceipt 是发起发布后的回执视图（json 模式 stdout 输出）
@@ -147,7 +149,7 @@ func runPromote(skipConfirm, wait bool, timeout time.Duration, output string) er
 		info = os.Stderr
 	}
 
-	source, current, err := promoteSummary(client, target.productKey)
+	source, current, err := promoteSummary(client, target.prodKey)
 	if err != nil {
 		return err
 	}
@@ -184,8 +186,8 @@ func runPromote(skipConfirm, wait bool, timeout time.Duration, output string) er
 // promoteSummary 取来源（beta 当前 commit）与目标（production 当前 commit）的短 sha 做确认摘要。
 // beta 从未部署时 fail-fast——服务端同样会拒绝，但在确认表单之前拦住省一次交互；
 // 总览查询本身失败则降级为 unknown 交服务端裁决，不因装饰性查询阻断发布。
-func promoteSummary(client *api.Client, productKey string) (source, current string, err error) {
-	overview, err := client.GetDeploymentOverview(productKey)
+func promoteSummary(client *api.Client, prodKey string) (source, current string, err error) {
+	overview, err := client.GetDeploymentOverview(prodKey)
 	if err != nil {
 		return "unknown", "unknown", nil
 	}
@@ -239,7 +241,7 @@ func productionURLFor(client *api.Client, target *promoteTarget, st *api.Promote
 	if !st.Succeeded() {
 		return ""
 	}
-	return envURLFor(client, target.productKey, api.EnvProduction)
+	return envURLFor(client, target.prodKey, api.EnvProduction)
 }
 
 // waitAndRenderPromote 阻塞轮询发布至终态，然后渲染完整详情（成功时带 production URL）。
@@ -416,7 +418,29 @@ func loadPromoteRun(target *promoteTarget) (*promoteRunRecord, error) {
 	return &rec, nil
 }
 
-// confirmProductionPromote 在发布到 production 前要求 continue/abort 确认（与 deploy 同一护栏）
+// confirmProductionPromote 在发布到 production 前要求 continue/abort 确认（与 app delete 同款 huh 护栏）。
+// 非交互终端（CI / 管道）无法应答，直接拒绝并指引 --yes，杜绝挂起。
+// confirmed 初值 false → 表单默认停在 Abort，用户须显式选 Continue 才放行；
+// ErrUserAborted（Ctrl-C）与选 Abort 都视为取消。
 func confirmProductionPromote(appKey string) error {
-	return confirmProductionAction("promote", appKey, "This publishes the beta environment to production.")
+	if !isatty.IsTerminal(os.Stdin.Fd()) {
+		return fmt.Errorf("refusing to promote %q to production without confirmation: re-run with --yes in a non-interactive shell", appKey)
+	}
+
+	confirmed := false
+	err := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title(fmt.Sprintf("Promote %q to PRODUCTION?", appKey)).
+				Description("This publishes the beta environment to production.").
+				Affirmative("Continue").
+				Negative("Abort").
+				Value(&confirmed),
+		),
+	).Run()
+
+	if errors.Is(err, huh.ErrUserAborted) || (err == nil && !confirmed) {
+		return fmt.Errorf("production promote of %q cancelled", appKey)
+	}
+	return err
 }

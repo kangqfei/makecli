@@ -24,8 +24,9 @@ func newContextCmd() *cobra.Command {
 		Long: `A context selects which Make backend every command talks to: dev, test or production.
 It is resolved as --context > $` + EnvContext + ` > [settings] context > ` + config.DefaultContext + `.
 
-Not to be confused with an app's deployment environment (beta / production),
-which is the --env flag of "app deploy" and "app delete".`,
+Not to be confused with an app's deployment environment (beta / production):
+"app deploy" always targets beta, "app promote" publishes beta to production,
+and "app delete --env" picks which half of the pair to delete.`,
 		Example: `  makecli context list
   makecli context use test
   makecli context show

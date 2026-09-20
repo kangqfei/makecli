@@ -12,7 +12,7 @@ import "fmt"
 
 // ---------------------------------- 环境词汇 ----------------------------------
 
-// 用户面环境词汇是 beta / production（与 App 的 product/beta 配对、Make Console 一致）；
+// 用户面环境词汇是 beta / production（与 App 的 prod/beta 配对、Make Console 一致）；
 // 服务端把 beta 环境仍以 "preview" 为 key（仓库 properties.env、部署总览字段、构建任务 environment）。
 // ServerEnvKey / DisplayEnv 是这层翻译仅有的两处出入口，其余代码只说用户面词汇。
 const (

@@ -448,9 +448,9 @@ func TestGetRelationNotFoundSemantics(t *testing.T) {
 }
 
 func TestAppKeyForEnv(t *testing.T) {
-	product := &App{Key: "shop", Meta: map[string]any{"appRole": "product", "pairAppKey": "shop_beta_"}}
+	prod := &App{Key: "shop", Meta: map[string]any{"appRole": "prod", "pairAppKey": "shop_beta_"}}
 	beta := &App{Key: "shop_beta_", Meta: map[string]any{"appRole": "beta", "pairAppKey": "shop"}}
-	legacy := &App{Key: "old", Meta: map[string]any{}} // 无 appRole 的历史 app 视为 product
+	legacy := &App{Key: "old", Meta: map[string]any{}} // 无 appRole 的历史 app 视为 prod
 	tests := []struct {
 		name    string
 		app     *App
@@ -458,8 +458,8 @@ func TestAppKeyForEnv(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{"product/beta → pair", product, EnvBeta, "shop_beta_", false},
-		{"product/production → self", product, EnvProduction, "shop", false},
+		{"prod/beta → pair", prod, EnvBeta, "shop_beta_", false},
+		{"prod/production → self", prod, EnvProduction, "shop", false},
 		{"beta/beta → self", beta, EnvBeta, "shop_beta_", false},
 		{"beta/production → pair", beta, EnvProduction, "shop", false},
 		{"legacy/production → self", legacy, EnvProduction, "old", false},

@@ -87,7 +87,7 @@ func appEnvironmentBody(betaKey string, properties map[string]any) map[string]an
 }
 
 // PromoteApp 调用 MakeService.CreateResource 发起 beta → production 发布。
-// 服务端校验管理员权限与 beta/product 绑定、固定 beta 最近一次成功部署的版本后异步执行；
+// 服务端校验管理员权限与 beta/prod 绑定、固定 beta 最近一次成功部署的版本后异步执行；
 // 同一 beta 已有发布在跑时复用当前任务（回执即该任务的 workflowId/runId），不会重复发布。
 // 业务码 404 返回 ErrNotFound（beta app 不存在），其余非 200 原样为「API 错误」。
 func (c *Client) PromoteApp(betaKey string) (*PromoteRun, error) {

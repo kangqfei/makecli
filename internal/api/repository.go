@@ -56,7 +56,7 @@ type CodeRepoProperties struct {
 }
 
 // CodeRepoResource 是 /code/v1/repository 各动作返回的 data 段。
-// 仓库按 app 而非按环境划分：product / beta 配对各自一个仓库，环境 → app 的定位由 App.KeyForEnv 完成，
+// 仓库按 app 而非按环境划分：prod / beta 配对各自一个仓库，环境 → app 的定位由 App.KeyForEnv 完成，
 // 本资源只回答「这个 app 的仓库在哪」
 type CodeRepoResource struct {
 	AppKey     string             `json:"appKey"`

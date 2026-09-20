@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 bytes、encoding/json、errors、fmt、io、net/http、strings、time，依赖 debug.go 的 debugSink，依赖 internal/trace 的 TraceID/Traceparent
- * [OUTPUT]: 对外提供 Client 类型、ErrNotFound / ErrAuthFailed 哨兵错误、UniqueConstraintError 类型化错误（409 唯一性冲突，errors.As 判定）、Option / WithDebug(on, DebugFormat) / WithHeaders / WithDryRun 功能选项、New 构造函数、App（Role / PairAppKey / HostedEnv / KeyForEnv：product/beta 配对知识收口，环境 → 承载 app key）、RoleProduct / RoleBeta 常量 / Field / Entity / EntityProperties / UniqueConstraint / RelationEnd / RelationProperties / Relation / Schema 类型、CreateApp(key, name, properties) / ListApps(page, size, filter) / DeleteApp(key) / GetApp(key) / CreateEntity(key, name, appKey, props) / ListEntities(appKey, page, size, filter) / GetEntity(appKey, key) / UpdateEntity(key, name, appKey, props) / DeleteEntity / CreateRelation(key, name, appKey, props) / UpdateRelation / ListRelations(appKey, ...) / GetRelation(appKey, key) / DeleteRelation / GetSchema(appKey) 方法。资源以 Key 为唯一标识符（英数下划线），Name 为用户可见展示名（支持中文）。Get* 方法在资源确实不存在时返回 ErrNotFound（可用 errors.Is 判定），其余错误（传输/非 not-found 业务码/解码）原样返回
+ * [OUTPUT]: 对外提供 Client 类型、ErrNotFound / ErrAuthFailed 哨兵错误、UniqueConstraintError 类型化错误（409 唯一性冲突，errors.As 判定）、Option / WithDebug(on, DebugFormat) / WithHeaders / WithDryRun 功能选项、New 构造函数、App（Role / PairAppKey / HostedEnv / KeyForEnv：prod/beta 配对知识收口，环境 → 承载 app key）、RoleProd / RoleBeta 常量 / Field / Entity / EntityProperties / UniqueConstraint / RelationEnd / RelationProperties / Relation / Schema 类型、CreateApp(key, name, properties) / ListApps(page, size, filter) / DeleteApp(key) / GetApp(key) / CreateEntity(key, name, appKey, props) / ListEntities(appKey, page, size, filter) / GetEntity(appKey, key) / UpdateEntity(key, name, appKey, props) / DeleteEntity / CreateRelation(key, name, appKey, props) / UpdateRelation / ListRelations(appKey, ...) / GetRelation(appKey, key) / DeleteRelation / GetSchema(appKey) 方法。资源以 Key 为唯一标识符（英数下划线），Name 为用户可见展示名（支持中文）。Get* 方法在资源确实不存在时返回 ErrNotFound（可用 errors.Is 判定），其余错误（传输/非 not-found 业务码/解码）原样返回
  * [POS]: internal/api 的核心，封装 Make Meta Service 的 HTTP 调用
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -154,18 +154,18 @@ type App struct {
 	Properties map[string]any `json:"properties"`
 }
 
-// App 角色（MetaAPIDesign.md）：每个 App 是 product/beta 一对，meta.appRole 标角色，meta.pairAppKey 指向配对 app
+// App 角色（MetaAPIDesign.md）：每个 App 是 prod/beta 一对，meta.appRole 标角色，meta.pairAppKey 指向配对 app
 const (
-	RoleProduct = "product"
-	RoleBeta    = "beta"
+	RoleProd = "prod"
+	RoleBeta = "beta"
 )
 
-// Role 返回 meta.appRole；缺省（历史 app）视为 product
+// Role 返回 meta.appRole；缺省（历史 app）视为 prod
 func (a *App) Role() string {
 	if role, _ := a.Meta["appRole"].(string); role == RoleBeta {
 		return RoleBeta
 	}
-	return RoleProduct
+	return RoleProd
 }
 
 // PairAppKey 返回 meta.pairAppKey（无配对为空串）
@@ -174,7 +174,7 @@ func (a *App) PairAppKey() string {
 	return pair
 }
 
-// HostedEnv 返回本 app 自身承载的环境：beta 角色承载 EnvBeta，product 角色承载 EnvProduction
+// HostedEnv 返回本 app 自身承载的环境：beta 角色承载 EnvBeta，prod 角色承载 EnvProduction
 func (a *App) HostedEnv() string {
 	if a.Role() == RoleBeta {
 		return EnvBeta

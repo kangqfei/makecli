@@ -136,11 +136,11 @@ func TestResolveDeleteSteps(t *testing.T) {
 		wantErr               bool
 	}{
 		{"production 删本体，不反查", appRoleProduction, "", "", []deleteStep{{"myapp", appRoleProduction}}, false},
-		{"beta 取服务端 pairAppKey", appRoleBeta, "product", "myapp_beta_", []deleteStep{{"myapp_beta_", appRoleBeta}}, false},
-		{"beta 但传入的是 beta app 拒绝，不反删 product", appRoleBeta, "beta", "myapp", nil, true},
-		{"beta 无配对拒绝", appRoleBeta, "product", "", nil, true},
-		{"all 先 beta 后 production", envAll, "product", "myapp_beta_", []deleteStep{{"myapp_beta_", appRoleBeta}, {"myapp", appRoleProduction}}, false},
-		{"all 无配对只剩 production", envAll, "product", "", []deleteStep{{"myapp", appRoleProduction}}, false},
+		{"beta 取服务端 pairAppKey", appRoleBeta, "prod", "myapp_beta_", []deleteStep{{"myapp_beta_", appRoleBeta}}, false},
+		{"beta 但传入的是 beta app 拒绝，不反删 prod", appRoleBeta, "beta", "myapp", nil, true},
+		{"beta 无配对拒绝", appRoleBeta, "prod", "", nil, true},
+		{"all 先 beta 后 production", envAll, "prod", "myapp_beta_", []deleteStep{{"myapp_beta_", appRoleBeta}, {"myapp", appRoleProduction}}, false},
+		{"all 无配对只剩 production", envAll, "prod", "", []deleteStep{{"myapp", appRoleProduction}}, false},
 		{"all 传入 beta app 拒绝", envAll, "beta", "myapp", nil, true},
 		{"空 env 拒绝", "", "", "", nil, true},
 		{"未知 env 拒绝", "preview", "", "", nil, true},
@@ -164,7 +164,7 @@ func TestResolveDeleteSteps(t *testing.T) {
 func TestRunAppDeleteAll(t *testing.T) {
 	// --env ALL（大小写不敏感）按 beta → production 顺序删两次，确认只问一次
 	var deleted []string
-	srv := newMockPairMeta(t, "product", "myapp_beta_", &deleted)
+	srv := newMockPairMeta(t, "prod", "myapp_beta_", &deleted)
 	defer srv.Close()
 	t.Setenv("HOME", t.TempDir())
 	saveDefaultToken(t)
@@ -186,7 +186,7 @@ func TestRunAppDeleteAll(t *testing.T) {
 func TestRunAppDeleteBetaTarget(t *testing.T) {
 	// --env beta 时 API 删除的是服务端给的 pairAppKey，而确认表单只见用户给的 app key（配对 key 不外露）
 	var deleted []string
-	srv := newMockPairMeta(t, "product", "myapp_beta_", &deleted)
+	srv := newMockPairMeta(t, "prod", "myapp_beta_", &deleted)
 	defer srv.Close()
 	t.Setenv("HOME", t.TempDir())
 	saveDefaultToken(t)
