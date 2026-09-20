@@ -1,7 +1,8 @@
 /**
  * [INPUT]: 依赖 os、bufio、fmt、io、regexp、sort、strings、path/filepath；依赖 paths.go 的 Dir、settings.go 的 ValidateProfileName
- * [OUTPUT]: 对外提供 LoadConfig、SaveConfig、SetSetting、ConfigPath 函数，Config/ConfigProfile 类型；包内 validateINIKey / validateINIValue（写路径 INI 注入防线，被 credentials.go 复用）
+ * [OUTPUT]: 对外提供 LoadConfig、SaveConfig、SetSetting、MigrateSettings、ConfigPath 函数，Config/ConfigProfile 类型；包内 updateSettings（[settings] read-modify-write 原语）、validateINIKey / validateINIValue（写路径 INI 注入防线，被 credentials.go 复用）
  * [POS]: internal/config 的 config 文件管理，读写 config 文件（默认 ~/.make/config，INI 格式）；
+ *        [settings] 的两种写法（SetSetting 单键、MigrateSettings 旧键搬家）都经 updateSettings 一条路；
  *        所有落盘键值先过 validateINIKey/validateINIValue（拒换行与首尾空白，防止值注入伪造 section/键）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -174,9 +175,36 @@ func SaveConfig(cfg Config) error {
 	return saveConfigWithSettings(cfg, existingSettings(path))
 }
 
-// SetSetting 写入 [settings] 段的单个全局键（read-modify-write）：
-// 读取现有 profile 段与 [settings]，改/插该键后整体落盘，保留其余内容。
+// SetSetting 写入 [settings] 段的单个全局键，保留其余内容。
 func SetSetting(key, value string) error {
+	return updateSettings(func(settings map[string]string) { settings[key] = value })
+}
+
+// MigrateSettings 把 [settings] 里仍用旧名的键按 legacySettingKeys 搬到新键：
+// 新键已存在则以新键为准只删旧键（用户已手动迁移过），否则值随键搬家。
+// 返回实际执行的搬家清单（旧键 → 新键），空清单 = 无事可做且不落盘。
+func MigrateSettings() (map[string]string, error) {
+	moved := map[string]string{}
+	err := updateSettings(func(settings map[string]string) {
+		for old, current := range legacySettingKeys {
+			v, ok := settings[old]
+			if !ok {
+				continue
+			}
+			if _, exists := settings[current]; !exists {
+				settings[current] = v
+			}
+			delete(settings, old)
+			moved[old] = current
+		}
+	})
+	return moved, err
+}
+
+// updateSettings 是 [settings] 段的 read-modify-write 原语：
+// 读取现有 profile 段与 [settings]，交 mutate 就地修改后整体落盘，保留其余内容。
+// mutate 未做任何改动时同样落盘（幂等重写，无副作用）。
+func updateSettings(mutate func(settings map[string]string)) error {
 	cfg, err := LoadConfig()
 	if err != nil {
 		return err
@@ -189,7 +217,7 @@ func SetSetting(key, value string) error {
 	if settings == nil {
 		settings = map[string]string{}
 	}
-	settings[key] = value
+	mutate(settings)
 	return saveConfigWithSettings(cfg, settings)
 }
 

@@ -118,7 +118,9 @@ token 按以下顺序取值，命中即止：
 2. `MAKE_ACCESS_TOKEN` 环境变量
 3. `~/.make/credentials` 中当前 profile 的 `access_token`
 
-服务器地址同构：`--meta-server-url` > `MAKE_META_SERVER_URL` > `~/.make/config` 的 `meta-server-url`，都没配则用当前 `--env` 环境的内置地址；代码仓库服务无 flag 级，`MAKE_REPO_SERVER_URL` > `repo-server-url` > 内置地址。
+服务器地址同构：`--meta-server-url` > `MAKE_META_SERVER_URL` > `~/.make/config` 的 `meta-server-url`，都没配则用当前 context 的内置地址；代码仓库服务无 flag 级，`MAKE_REPO_SERVER_URL` > `repo-server-url` > 内置地址。
+
+后端 context（连哪套 Make 后端：dev / test / production）与 profile 正交：`--context` > `MAKE_CLI_CONTEXT` > `~/.make/config` 的 `[settings] context` > `production`。`makecli context list` 列出内置 context 并标当前，`makecli context use <name>` 持久切换，`makecli context show` 回显本次生效值。注意 context 不是 app 的部署环境——`app deploy --env beta|production` 里的 `--env` 指后者。旧版 `[settings] environment` 键不再识别：`makecli doctor` 只检查并标出可修项，`makecli doctor --fix` 原地迁移。
 
 ```bash
 # CI / 脚本：用环境变量，不落盘、不进 shell history

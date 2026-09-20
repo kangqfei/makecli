@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 无外部依赖
  * [OUTPUT]: 对外提供 ChannelStable/ChannelBeta/DefaultChannel 常量与 ChannelNames 函数
- * [POS]: internal/config 的发布通道域常量（域取值单一真相源，与 environment.go 同责），被 cmd 层与 internal/notifier 消费
+ * [POS]: internal/config 的发布通道域常量（域取值单一真相源，与 context.go 同责），被 cmd 层与 internal/notifier 消费
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 

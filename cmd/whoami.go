@@ -104,7 +104,7 @@ func renderWhoami(info *api.UserInfo) {
 		{"Tenant ID", info.Tenant.ID},
 		{"Tenant", info.Tenant.TenantName},
 		{"Profile", Profile},
-		{"Environment", envName()},
+		{"Context", contextName()},
 	})
 	_ = table.Render()
 

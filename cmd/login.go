@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 internal/oauth（Discover/RegisterClient/StartCallbackServer/PKCE/BuildAuthorizationURL/ExchangeAuthorizationCode/OpenBrowser）、internal/config（Load/Save/LoadConfig/CredentialsPath）、context、fmt、net/http、os、strings、time、github.com/spf13/cobra；从 root.go 读取全局 Profile / Environment 与 client.go 的 firstNonEmpty / resolveEnvironment
+ * [INPUT]: 依赖 internal/oauth（Discover/RegisterClient/StartCallbackServer/PKCE/BuildAuthorizationURL/ExchangeAuthorizationCode/OpenBrowser）、internal/config（Load/Save/LoadConfig/CredentialsPath）、context、fmt、net/http、os、strings、time、github.com/spf13/cobra；从 root.go 读取全局 Profile / Context 与 client.go 的 firstNonEmpty / resolveContext
  * [OUTPUT]: 对外提供 newLoginCmd 函数
  * [POS]: cmd 模块的 login 顶级命令，编排浏览器 OAuth 登陆，把 access_token 写入 ~/.make/credentials[Profile]
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -74,12 +74,12 @@ func runLogin(timeout time.Duration, noOpenBrowser bool) error {
 	if err != nil {
 		return err
 	}
-	env, err := resolveEnvironment()
+	_, c, err := resolveContext()
 	if err != nil {
 		return err
 	}
-	// 身份服务器基址：profile 的 auth-server-url 覆盖当前环境 preset
-	authBase := firstNonEmpty(cfg[Profile].AuthServerURL, env.AuthServerURL)
+	// 身份服务器基址：profile 的 auth-server-url 覆盖当前 context preset
+	authBase := firstNonEmpty(cfg[Profile].AuthServerURL, c.AuthServerURL)
 
 	meta, err := oauth.Discover(ctx, httpClient, authMetadataURL(authBase))
 	if err != nil {

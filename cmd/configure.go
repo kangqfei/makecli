@@ -38,15 +38,16 @@ const sampleConfig = `# MakeCLI configuration reference - every available key wi
 
 # ===== Global settings (shared by every profile) =====
 [settings]
-# Active backend environment. One of: dev, test, production
-environment = dev
+# Active backend context (which Make backend to talk to). One of: dev, test, production
+# Switch with: makecli context use <name>
+context = dev
 # Auto-update notifier. true | false
 check-for-updates = true
 # Release channel for updates and the update notifier. One of: stable, beta
 channel = stable
 
 # ===== Profile: default (select another with --profile <name>) =====
-# These override the environment preset and are optional - replace the
+# These override the context preset and are optional - replace the
 # placeholders, or delete a line to fall back to the preset for that host.
 [default]
 # Meta Server host (the gateway prefix /api/make is added automatically)
@@ -74,8 +75,8 @@ func newConfigureCmd() *cobra.Command {
   makecli configure --sample
 
   # non-interactively set / read a single value
-  makecli configure set environment test
-  makecli configure get environment`,
+  makecli configure set context test
+  makecli configure get context`,
 		SilenceUsage: true,
 		// 所有 configure 子命令统一前置校验 profile 名（settings 为保留段名，不可作 profile）
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
@@ -229,15 +230,16 @@ func validateConfigKey(key string) error {
 	return fmt.Errorf("unknown config key '%s', valid keys: %s", key, strings.Join(validConfigKeys, ", "))
 }
 
-// environmentKey 是 configure set/get 里路由到全局 [settings]（而非 profile）的特殊键名。
-const environmentKey = "environment"
+// contextKey 是 configure set/get 里路由到全局 [settings]（而非 profile）的特殊键名。
+const contextKey = "context"
 
-// setEnvironment 校验环境名后写入全局 [settings] environment（不受 --profile 影响）。
-func setEnvironment(value string) error {
-	if !slices.Contains(config.EnvironmentNames(), value) {
-		return fmt.Errorf("unknown environment '%s', valid: %s", value, strings.Join(config.EnvironmentNames(), ", "))
+// setContext 校验 context 名后写入全局 [settings] context（不受 --profile 影响）。
+// `makecli context use` 与 `configure set context` 共用此唯一写路径。
+func setContext(value string) error {
+	if !slices.Contains(config.ContextNames(), value) {
+		return fmt.Errorf("unknown context '%s', valid: %s", value, strings.Join(config.ContextNames(), ", "))
 	}
-	return config.SetSetting(environmentKey, value)
+	return config.SetSetting(contextKey, value)
 }
 
 // channelKey 是 configure set/get 里路由到全局 [settings] 的发布通道特殊键名。
@@ -258,14 +260,14 @@ func newConfigureSetCmd() *cobra.Command {
 		Long: fmt.Sprintf(`Set a single config value as "<key> <value>" — exactly two args, no section name.
 
 Most keys write to the current --profile section: %s
-The special keys "environment" and "channel" instead write to the global
-[settings] section (shared by every profile). environment accepts: %s.
+The special keys "context" and "channel" instead write to the global
+[settings] section (shared by every profile). context accepts: %s.
 channel accepts: %s.`,
 			strings.Join(validConfigKeys, ", "),
-			strings.Join(config.EnvironmentNames(), ", "),
+			strings.Join(config.ContextNames(), ", "),
 			strings.Join(config.ChannelNames(), ", ")),
-		Example: `  # switch backend environment (global, affects every profile)
-  makecli configure set environment test
+		Example: `  # switch backend context (global, affects every profile; same as: makecli context use test)
+  makecli configure set context test
 
   # track pre-releases with bare 'makecli update'
   makecli configure set channel beta
@@ -284,8 +286,8 @@ channel accepts: %s.`,
 }
 
 func runConfigureSet(key, value string) error {
-	if key == environmentKey {
-		return setEnvironment(value)
+	if key == contextKey {
+		return setContext(value)
 	}
 	if key == channelKey {
 		return setChannel(value)
@@ -323,10 +325,10 @@ func newConfigureGetCmd() *cobra.Command {
 		Long: fmt.Sprintf(`Read a single config value by key.
 
 Profile keys: %s
-The special keys "environment" and "channel" read the global [settings] section.`,
+The special keys "context" and "channel" read the global [settings] section.`,
 			strings.Join(validConfigKeys, ", ")),
-		Example: `  # read the active backend environment (global)
-  makecli configure get environment
+		Example: `  # read the configured backend context (global; see also: makecli context show)
+  makecli configure get context
 
   # read the active release channel (global)
   makecli configure get channel
@@ -342,12 +344,12 @@ The special keys "environment" and "channel" read the global [settings] section.
 }
 
 func runConfigureGet(key string) error {
-	if key == environmentKey {
+	if key == contextKey {
 		settings, err := config.LoadSettings()
 		if err != nil {
 			return err
 		}
-		fmt.Println(firstNonEmpty(settings.Environment, config.DefaultEnvironment))
+		fmt.Println(firstNonEmpty(settings.Context, config.DefaultContext))
 		return nil
 	}
 	if key == channelKey {

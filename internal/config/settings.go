@@ -1,7 +1,8 @@
 /**
  * [INPUT]: 依赖 fmt、os、regexp、strconv；依赖 config.go 的 parseINISections、ConfigPath
- * [OUTPUT]: 对外提供 Settings 类型、LoadSettings、ValidateProfileName 函数；包内 settingsSection 常量、validProfileName 正则
- * [POS]: internal/config 的全局设置读取，承载非 profile 相关的 [settings] 段（check-for-updates / environment / channel）；
+ * [OUTPUT]: 对外提供 Settings 类型、LoadSettings、ValidateProfileName 函数；包内 settingsSection 常量、validProfileName 正则、legacySettingKeys 表
+ * [POS]: internal/config 的全局设置读取，承载非 profile 相关的 [settings] 段（check-for-updates / context / channel）；
+ *        旧键（environment）只登记进 Settings.Legacy 不翻译——解析链不背历史包袱，迁移由 MigrateSettings（doctor）一次性完成；
  *        ValidateProfileName 同时承担 profile 名文法把关（保守文法 + 保留名），是所有写路径的 INI 注入第一道闸
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -36,14 +37,23 @@ func ValidateProfileName(name string) error {
 	return nil
 }
 
+// legacySettingKeys 是已改名的 [settings] 键：旧键 → 新键。
+// 读路径只登记命中（Settings.Legacy），不做翻译；MigrateSettings 按此表搬家。
+// 新增改名只需加一行，doctor 与 LoadSettings 自动跟上。
+var legacySettingKeys = map[string]string{
+	"environment": "context",
+}
+
 // Settings 持有全局配置项。指针字段表达三态：nil = 文件未设置该项。
 type Settings struct {
 	// CheckForUpdates 控制自动更新提示是否启用；nil 表示未配置（由调用方决定默认）
 	CheckForUpdates *bool
-	// Environment 是当前后端环境名（dev/test/production）；空串 = 未配置（调用方回退 DefaultEnvironment）
-	Environment string
+	// Context 是当前后端 context 名（dev/test/production）；空串 = 未配置（调用方回退 DefaultContext）
+	Context string
 	// Channel 是发布通道名（stable/beta）；空串 = 未配置（调用方回退 DefaultChannel）
 	Channel string
+	// Legacy 是文件里仍在用旧名的键（旧键 → 值）；非空即配置过期，调用方应指引 makecli doctor --fix
+	Legacy map[string]string
 }
 
 // LoadSettings 读取 config 文件的 [settings] 全局段。
@@ -75,8 +85,16 @@ func LoadSettings() (Settings, error) {
 				s.CheckForUpdates = &b
 			}
 		}
-		s.Environment = kv["environment"]
+		s.Context = kv["context"]
 		s.Channel = kv["channel"]
+		for old := range legacySettingKeys {
+			if v, ok := kv[old]; ok {
+				if s.Legacy == nil {
+					s.Legacy = map[string]string{}
+				}
+				s.Legacy[old] = v
+			}
+		}
 	}
 	return s, nil
 }

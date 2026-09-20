@@ -84,7 +84,7 @@ var agentCmd = &cobra.Command{
 var errAgentTokenMissing = errors.New("缺少平台 token: 传 --token 或设置 MAKE_AGENT_TOKEN")
 
 func init() {
-	agentCmd.Flags().StringVar(&agentGatewayServerURL, "gateway-server-url", "", "Agent 平台 gateway 地址(缺省 MAKE_AGENT_SERVER_URL,再缺省按 --env 环境 preset)")
+	agentCmd.Flags().StringVar(&agentGatewayServerURL, "gateway-server-url", "", "Agent 平台 gateway 地址(缺省 MAKE_AGENT_SERVER_URL,再缺省按 --context preset)")
 	agentCmd.Flags().StringVar(&agentToken, "token", "", "平台 token(缺省读 MAKE_AGENT_TOKEN)")
 	agentCmd.Flags().StringVar(&agentModel, "model", "default", "模型别名(平台侧解析,非厂商模型名)")
 	agentCmd.Flags().StringVarP(&agentPrompt, "prompt", "p", "", "一次性模式:发送单条 prompt 后退出")

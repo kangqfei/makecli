@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 bytes、errors、fmt、strings、testing，依赖 internal/api 的 ErrAuthFailed；用 setProfile/setEnvFlag 隔离全局态
+ * [INPUT]: 依赖 bytes、errors、fmt、strings、testing，依赖 internal/api 的 ErrAuthFailed；用 setProfile/setContextFlag 隔离全局态
  * [OUTPUT]: 覆盖 reportExecuteError 各分支（nil/退出码哨兵静默/真实错误打印/鉴权升级）+ authFailedHint 文案 + ExitCode 退出码映射（0/2/124/1）
  * [POS]: cmd 模块错误呈现单一出口的测试，守护退出码哨兵静默、真实错误打印、鉴权引导升级三态与退出码契约
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -55,16 +55,16 @@ func TestReportExecuteError(t *testing.T) {
 	}
 }
 
-// TestAuthFailedHintShowsContext 守护鉴权引导回显当前 profile / env（用于识别环境串号）。
+// TestAuthFailedHintShowsContext 守护鉴权引导回显当前 profile / context（用于识别后端串号）。
 func TestAuthFailedHintShowsContext(t *testing.T) {
 	setProfile(t, "work")
-	setEnvFlag(t, "production")
+	setContextFlag(t, "production")
 
 	hint := authFailedHint(fmt.Errorf("%w [990300403]: token验证失败", api.ErrAuthFailed))
 
 	for _, want := range []string{
 		"鉴权失败 [990300403]: token验证失败",
-		"当前 profile: work | env: production | token 来源: credentials",
+		"当前 profile: work | context: production | token 来源: credentials",
 		"    makecli login",
 	} {
 		if !strings.Contains(hint, want) {

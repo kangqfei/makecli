@@ -1,8 +1,8 @@
 /**
- * [INPUT]: 依赖 github.com/spf13/cobra、errors、fmt、net/url、time；复用 client.go 的 resolveEnvironment（环境 preset）与 login.go 的 openBrowserFunc（浏览器打开桩点）
+ * [INPUT]: 依赖 github.com/spf13/cobra、errors、fmt、net/url、time；复用 client.go 的 resolveContext（context preset）与 login.go 的 openBrowserFunc（浏览器打开桩点）
  * [OUTPUT]: 对外提供 traceCmd——`makecli trace` 子命令（Hidden：内部排障工具，不对普通用户展示）；包内 traceURL 纯函数、nowFunc 桩点
  * [POS]: cmd 模块的 trace 直达入口：按 --id 与时间窗口拼 OpenObserve trace-details URL 并打开本地浏览器；
- *        OpenObserve 基址随全局 --env 取自 config.Environment.TraceServerURL（dev/test → openobserve.qtech.cn，production → openobserve.qfei.cn）
+ *        OpenObserve 基址随全局 --context 取自 config.Context.TraceServerURL（dev/test → openobserve.qtech.cn，production → openobserve.qfei.cn）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -48,11 +48,11 @@ var traceCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		env, err := resolveEnvironment()
+		_, c, err := resolveContext()
 		if err != nil {
 			return err
 		}
-		target := traceURL(env.TraceServerURL, traceID, window, nowFunc())
+		target := traceURL(c.TraceServerURL, traceID, window, nowFunc())
 		// URL 先落 stdout：浏览器打不开时用户仍可手动复制；agent 场景也能直接消费。
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), target)
 		return openBrowserFunc(target)

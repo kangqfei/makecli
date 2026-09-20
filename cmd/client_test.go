@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 依赖 cmd 包内的 resolveAccessToken / metaServerURL / repoServerURL / resolveEnvironment / 全局 AccessToken / MetaServerURL / Environment（白盒），internal/config（Save/SetSetting）、testing
- * [OUTPUT]: 覆盖 token 取值链（--access-token > $MAKE_ACCESS_TOKEN > credentials）、主机地址取值链（flag > $MAKE_*_SERVER_URL > profile config > 环境内置地址）、环境解析优先级（flag > settings > 默认）与 withGateway 网关前缀拼接的单元测试
- * [POS]: cmd 模块 client.go resolveAccessToken / resolveEnvironment / withGateway 的配套测试，t.Setenv 隔离配置
+ * [INPUT]: 依赖 cmd 包内的 resolveAccessToken / metaServerURL / repoServerURL / resolveContext / contextName / 全局 AccessToken / MetaServerURL / Context（白盒），internal/config（Save/SetSetting）、strings、testing
+ * [OUTPUT]: 覆盖 token 取值链（--access-token > $MAKE_ACCESS_TOKEN > credentials）、主机地址取值链（flag > $MAKE_*_SERVER_URL > profile config > context 内置地址）、context 解析优先级（flag > $MAKE_CLI_CONTEXT > settings > 默认、旧键 environment 拒绝并指引 doctor、flag 绕过旧键守卫、contextName 失败回显 unknown）与 withGateway 网关前缀拼接的单元测试
+ * [POS]: cmd 模块 client.go resolveAccessToken / resolveContext / withGateway 的配套测试，t.Setenv 隔离配置
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -10,17 +10,18 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/qfeius/makecli/internal/config"
 )
 
-// setEnvFlag 临时覆盖全局 Environment（--env），结束自动还原。
-func setEnvFlag(t *testing.T, name string) {
+// setContextFlag 临时覆盖全局 Context（--context），结束自动还原。
+func setContextFlag(t *testing.T, name string) {
 	t.Helper()
-	old := Environment
-	Environment = name
-	t.Cleanup(func() { Environment = old })
+	old := Context
+	Context = name
+	t.Cleanup(func() { Context = old })
 }
 
 // setAccessTokenFlag 临时覆盖全局 AccessToken（--access-token），结束自动还原。
@@ -79,7 +80,7 @@ func setMetaServerURLFlag(t *testing.T, meta string) {
 // repo 链同构但没有 flag 级（代码仓库主机是部署实现细节），flag 只影响 meta。
 func TestServerURLChain(t *testing.T) {
 	cp := config.ConfigProfile{MetaServerURL: "https://cfg-meta", RepoServerURL: "https://cfg-repo"}
-	env := config.Environment{MetaServerURL: "https://preset-meta", RepoServerURL: "https://preset-repo"}
+	env := config.Context{MetaServerURL: "https://preset-meta", RepoServerURL: "https://preset-repo"}
 	cases := []struct {
 		name               string
 		flag, envVar       string
@@ -106,54 +107,114 @@ func TestServerURLChain(t *testing.T) {
 	}
 }
 
-func TestResolveEnvironment(t *testing.T) {
+func TestResolveContext(t *testing.T) {
 	t.Run("default production when nothing set", func(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
-		setEnvFlag(t, "")
-		env, err := resolveEnvironment()
+		t.Setenv(EnvContext, "")
+		setContextFlag(t, "")
+		name, c, err := resolveContext()
 		if err != nil {
-			t.Fatalf("resolveEnvironment: %v", err)
+			t.Fatalf("resolveContext: %v", err)
 		}
-		if env.MetaServerURL != "https://make.qfei.cn" {
-			t.Errorf("default MetaServerURL = %q", env.MetaServerURL)
+		if name != "production" || c.MetaServerURL != "https://make.qfei.cn" {
+			t.Errorf("default = %q / %q", name, c.MetaServerURL)
 		}
 	})
 
-	t.Run("settings environment over default", func(t *testing.T) {
+	t.Run("settings context over default", func(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
-		setEnvFlag(t, "")
-		if err := config.SetSetting("environment", "test"); err != nil {
+		t.Setenv(EnvContext, "")
+		setContextFlag(t, "")
+		if err := config.SetSetting("context", "test"); err != nil {
 			t.Fatal(err)
 		}
-		env, err := resolveEnvironment()
+		name, c, err := resolveContext()
 		if err != nil {
-			t.Fatalf("resolveEnvironment: %v", err)
+			t.Fatalf("resolveContext: %v", err)
 		}
-		if env.RepoServerURL != "https://test-make-repo.qtech.cn" {
-			t.Errorf("RepoServerURL = %q, want test", env.RepoServerURL)
+		if name != "test" || c.RepoServerURL != "https://test-make-repo.qtech.cn" {
+			t.Errorf("got %q / %q, want test", name, c.RepoServerURL)
 		}
 	})
 
-	t.Run("--env flag over settings", func(t *testing.T) {
+	t.Run("$MAKE_CLI_CONTEXT over settings", func(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
-		if err := config.SetSetting("environment", "test"); err != nil {
+		setContextFlag(t, "")
+		if err := config.SetSetting("context", "test"); err != nil {
 			t.Fatal(err)
 		}
-		setEnvFlag(t, "production")
-		env, err := resolveEnvironment()
+		t.Setenv(EnvContext, "dev")
+		name, _, err := resolveContext()
 		if err != nil {
-			t.Fatalf("resolveEnvironment: %v", err)
+			t.Fatalf("resolveContext: %v", err)
 		}
-		if env.MetaServerURL != "https://make.qfei.cn" {
-			t.Errorf("MetaServerURL = %q, want production", env.MetaServerURL)
+		if name != "dev" {
+			t.Errorf("name = %q, want dev (env var over settings)", name)
 		}
 	})
 
-	t.Run("unknown environment errors", func(t *testing.T) {
+	t.Run("--context flag over env var and settings", func(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
-		setEnvFlag(t, "staging")
-		if _, err := resolveEnvironment(); err == nil {
-			t.Error("expected error for unknown environment")
+		if err := config.SetSetting("context", "test"); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(EnvContext, "dev")
+		setContextFlag(t, "production")
+		name, c, err := resolveContext()
+		if err != nil {
+			t.Fatalf("resolveContext: %v", err)
+		}
+		if name != "production" || c.MetaServerURL != "https://make.qfei.cn" {
+			t.Errorf("got %q / %q, want production", name, c.MetaServerURL)
+		}
+	})
+
+	t.Run("unknown context errors", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		setContextFlag(t, "staging")
+		if _, _, err := resolveContext(); err == nil {
+			t.Error("expected error for unknown context")
+		}
+	})
+
+	t.Run("legacy environment key refuses and points to doctor", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv(EnvContext, "")
+		setContextFlag(t, "")
+		if err := config.SetSetting("environment", "dev"); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err := resolveContext()
+		if err == nil || !strings.Contains(err.Error(), "makecli doctor --fix") || !strings.Contains(err.Error(), "environment") {
+			t.Fatalf("expected outdated-config error naming the legacy key and doctor, got %v", err)
+		}
+	})
+
+	t.Run("flag bypasses the legacy guard", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		if err := config.SetSetting("environment", "dev"); err != nil {
+			t.Fatal(err)
+		}
+		setContextFlag(t, "test")
+		if _, _, err := resolveContext(); err != nil {
+			t.Fatalf("explicit --context should not consult settings: %v", err)
+		}
+	})
+}
+
+func TestContextName(t *testing.T) {
+	t.Run("returns resolved name", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		setContextFlag(t, "dev")
+		if got := contextName(); got != "dev" {
+			t.Errorf("contextName = %q, want dev", got)
+		}
+	})
+	t.Run("unknown on resolution failure", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		setContextFlag(t, "staging")
+		if got := contextName(); got != "unknown" {
+			t.Errorf("contextName = %q, want unknown", got)
 		}
 	})
 }

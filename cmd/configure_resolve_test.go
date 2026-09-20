@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 encoding/json、strings、testing、internal/config；对白盒 runConfigureResolve / outputJSON / outputTable 断言
- * [OUTPUT]: 覆盖 configure resolve 的 local-preview JSON 合约、环境解析优先级、profile/flag override 与 origin 归一化
+ * [OUTPUT]: 覆盖 configure resolve 的 local-preview JSON 合约、context 解析优先级、profile/flag override 与 origin 归一化
  * [POS]: cmd 模块 configure resolve 子命令的配套测试
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -25,8 +25,8 @@ func TestRunConfigureResolveLocalPreview(t *testing.T) {
 		if result.Profile != "default" {
 			t.Errorf("profile = %q, want default", result.Profile)
 		}
-		if result.Environment != "production" {
-			t.Errorf("environment = %q, want production", result.Environment)
+		if result.Context != "production" {
+			t.Errorf("context = %q, want production", result.Context)
 		}
 		if result.MakeAPIOrigin != "https://make.qfei.cn" {
 			t.Errorf("make_api_origin = %q, want production origin", result.MakeAPIOrigin)
@@ -39,35 +39,35 @@ func TestRunConfigureResolveLocalPreview(t *testing.T) {
 		}
 	})
 
-	t.Run("settings environment", func(t *testing.T) {
+	t.Run("settings context", func(t *testing.T) {
 		t.Setenv(config.EnvConfigDir, t.TempDir())
 		resetConfigureResolveGlobals(t)
-		if err := config.SetSetting("environment", "test"); err != nil {
+		if err := config.SetSetting("context", "test"); err != nil {
 			t.Fatal(err)
 		}
 
 		result, _ := runConfigureResolveForTest(t, "local-preview", outputJSON)
 
-		if result.Environment != "test" {
-			t.Errorf("environment = %q, want test", result.Environment)
+		if result.Context != "test" {
+			t.Errorf("context = %q, want test", result.Context)
 		}
 		if result.MakeAPIOrigin != "https://test-make.qtech.cn" {
 			t.Errorf("make_api_origin = %q, want test origin", result.MakeAPIOrigin)
 		}
 	})
 
-	t.Run("env flag overrides settings", func(t *testing.T) {
+	t.Run("--context flag overrides settings", func(t *testing.T) {
 		t.Setenv(config.EnvConfigDir, t.TempDir())
 		resetConfigureResolveGlobals(t)
-		setEnvironmentFlag(t, "dev")
-		if err := config.SetSetting("environment", "test"); err != nil {
+		setContextFlag(t, "dev")
+		if err := config.SetSetting("context", "test"); err != nil {
 			t.Fatal(err)
 		}
 
 		result, _ := runConfigureResolveForTest(t, "local-preview", outputJSON)
 
-		if result.Environment != "dev" {
-			t.Errorf("environment = %q, want dev", result.Environment)
+		if result.Context != "dev" {
+			t.Errorf("context = %q, want dev", result.Context)
 		}
 		if result.MakeAPIOrigin != "https://dev-make.qtech.cn" {
 			t.Errorf("make_api_origin = %q, want dev origin", result.MakeAPIOrigin)
@@ -168,23 +168,16 @@ func runConfigureResolveForTest(t *testing.T, target, output string) (*configure
 func resetConfigureResolveGlobals(t *testing.T) {
 	t.Helper()
 	oldProfile := Profile
-	oldEnvironment := Environment
+	oldContext := Context
 	oldMetaServerURL := MetaServerURL
 	Profile = "default"
-	Environment = ""
+	Context = ""
 	MetaServerURL = ""
 	t.Cleanup(func() {
 		Profile = oldProfile
-		Environment = oldEnvironment
+		Context = oldContext
 		MetaServerURL = oldMetaServerURL
 	})
-}
-
-func setEnvironmentFlag(t *testing.T, name string) {
-	t.Helper()
-	old := Environment
-	Environment = name
-	t.Cleanup(func() { Environment = old })
 }
 
 func setMetaServerURL(t *testing.T, url string) {

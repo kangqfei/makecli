@@ -1,10 +1,11 @@
 /**
- * [INPUT]: 依赖 internal/config（Load/LoadConfig/LoadSettings/LookupEnvironment）、internal/api（New/Option/WithDebug/DebugFormat/WithHeaders）、fmt、os、strings；从 root.go 读取全局 Profile / AccessToken / MetaServerURL / Environment / DebugMode，从 output.go 读取 resolvedOutput
- * [OUTPUT]: 对外提供 newClientFromProfile（变参 ...api.Option）/ newRepoClientFromProfile / debugOption（--debug × --output 合成 api.WithDebug）/ resolveAccessToken / accessTokenSource / metaServerURL / repoServerURL / resolveEnvironment / resolveChannel / envName 函数、withGateway helper、apiGatewayPath / EnvAccessToken / EnvMetaServerURL / EnvRepoServerURL 常量与 tokenSource 常量
- * [POS]: cmd 模块的公共 helper，统一「全局命令行入参 → API 客户端」的构建逻辑——profile / token / server / env / debug 全部由 root PersistentFlag 注入，子命令零参数调用；
+ * [INPUT]: 依赖 internal/config（Load/LoadConfig/LoadSettings/LookupContext）、internal/api（New/Option/WithDebug/DebugFormat/WithHeaders）、fmt、os、slices、strings；从 root.go 读取全局 Profile / AccessToken / MetaServerURL / Context / DebugMode，从 output.go 读取 resolvedOutput
+ * [OUTPUT]: 对外提供 newClientFromProfile（变参 ...api.Option）/ newRepoClientFromProfile / debugOption（--debug × --output 合成 api.WithDebug）/ resolveAccessToken / accessTokenSource / metaServerURL / repoServerURL / resolveContext / contextName / resolveChannel 函数、withGateway helper、apiGatewayPath / EnvAccessToken / EnvMetaServerURL / EnvRepoServerURL / EnvContext 常量与 tokenSource 常量
+ * [POS]: cmd 模块的公共 helper，统一「全局命令行入参 → API 客户端」的构建逻辑——profile / token / server / context / debug 全部由 root PersistentFlag 注入，子命令零参数调用；
  *        newClientFromProfile 收 ...api.Option 变参，把每命令横切选项（如 WithDryRun）追加到基础选项之后，写命令按需注入；
  *        resolveAccessToken 是 token 取值链的唯一入口：--access-token flag > $MAKE_ACCESS_TOKEN > credentials[profile].access_token（resolveProfile / configure verify / whoami 共用，不允许第二条链）；
- *        resolveProfile 收口凭证与配置解析，resolveEnvironment 收口环境 preset；主机地址取值链 metaServerURL：flag > $MAKE_META_SERVER_URL > profile config > 环境内置地址；repoServerURL 同构但无 flag 级（configure resolve / verify 同用，不允许手写第二条链），主机基址再经 withGateway 补网关前缀 /api/make
+ *        resolveContext 是后端 context 解析链的唯一入口：--context > $MAKE_CLI_CONTEXT > [settings] context > production，旧键 environment 未迁移即报错指引 doctor（login / trace / daemon / configure resolve|verify / context show 共用，不允许第二条链）；
+ *        resolveProfile 收口凭证与配置解析；主机地址取值链 metaServerURL：flag > $MAKE_META_SERVER_URL > profile config > context 内置地址；repoServerURL 同构但无 flag 级（configure resolve / verify 同用，不允许手写第二条链），主机基址再经 withGateway 补网关前缀 /api/make
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -103,18 +104,18 @@ const (
 )
 
 // metaServerURL / repoServerURL 是主机地址取值链的唯一入口，与 resolveAccessToken 同构：
-// flag > env > profile config > 当前环境内置地址（最后一级是默认值而非配置项）。
+// flag > env > profile config > 当前 context 内置地址（最后一级是默认值而非配置项）。
 // 返回裸主机基址，网关前缀由调用方经 withGateway 补齐。
-func metaServerURL(cp config.ConfigProfile, env config.Environment) string {
-	return firstNonEmpty(MetaServerURL, os.Getenv(EnvMetaServerURL), cp.MetaServerURL, env.MetaServerURL)
+func metaServerURL(cp config.ConfigProfile, c config.Context) string {
+	return firstNonEmpty(MetaServerURL, os.Getenv(EnvMetaServerURL), cp.MetaServerURL, c.MetaServerURL)
 }
 
 // repoServerURL 无 flag 级：代码仓库主机是部署实现细节，不值得占一个全局 flag；$MAKE_REPO_SERVER_URL 仍留给 CI/测试覆盖
-func repoServerURL(cp config.ConfigProfile, env config.Environment) string {
-	return firstNonEmpty(os.Getenv(EnvRepoServerURL), cp.RepoServerURL, env.RepoServerURL)
+func repoServerURL(cp config.ConfigProfile, c config.Context) string {
+	return firstNonEmpty(os.Getenv(EnvRepoServerURL), cp.RepoServerURL, c.RepoServerURL)
 }
 
-// firstNonEmpty 返回第一个非空字符串，统一「flag > env > config > 环境 preset」取值链
+// firstNonEmpty 返回第一个非空字符串，统一「flag > env > config > context preset」取值链
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if v != "" {
@@ -140,39 +141,56 @@ func withGateway(host string) string {
 	return host + apiGatewayPath
 }
 
-// envName 解析当前后端环境名：--env flag > [settings] environment > DefaultEnvironment。
-// 与 resolveEnvironment 同一解析链，但 fail-safe：吞掉 LoadSettings 错误回退默认，
-// 供纯展示场景（如鉴权失败引导回显环境）使用——展示不该因配置读取失败而无名可显。
-func envName() string {
-	if Environment != "" {
-		return Environment
-	}
-	if s, err := config.LoadSettings(); err == nil && s.Environment != "" {
-		return s.Environment
-	}
-	return config.DefaultEnvironment
-}
+// EnvContext 是后端 context 的环境变量名（会话级作用域，介于 --context 与 [settings] 之间）。
+// 前缀取 MAKE_CLI_：选哪套后端是工具自身行为，与 MAKE_CLI_CONFIG_DIR 同族，而非 MAKE_ 平台凭证族。
+const EnvContext = "MAKE_CLI_CONTEXT"
 
-// resolveEnvironment 解析当前后端环境 preset：--env flag > [settings] environment > DefaultEnvironment。
-// 未知环境名（typo / 非法手抄）报错，避免静默落到错误后端。
-func resolveEnvironment() (config.Environment, error) {
-	name := Environment
+// resolveContext 是后端 context 解析链的唯一入口，返回 context 名与其 preset：
+// --context flag > $MAKE_CLI_CONTEXT > [settings] context > DefaultContext。
+// 配置文件仍在用旧键（[settings] environment）时拒绝解析并指引 doctor --fix——
+// 不做静默回退：旧配置写着 dev 却悄悄落到 production 是最坏的兼容方式。
+// 未知 context 名（typo / 非法手抄）同样报错，避免静默落到错误后端。
+func resolveContext() (string, config.Context, error) {
+	name := firstNonEmpty(Context, os.Getenv(EnvContext))
 	if name == "" {
 		settings, err := config.LoadSettings()
 		if err != nil {
-			return config.Environment{}, err
+			return "", config.Context{}, err
 		}
-		name = settings.Environment
+		if len(settings.Legacy) > 0 {
+			return "", config.Context{}, fmt.Errorf("config is outdated ([settings] %s); run: %s", strings.Join(sortedKeys(settings.Legacy), ", "), doctorFixHint)
+		}
+		name = firstNonEmpty(settings.Context, config.DefaultContext)
 	}
-	env, ok := config.LookupEnvironment(name)
+	c, ok := config.LookupContext(name)
 	if !ok {
-		return config.Environment{}, fmt.Errorf("unknown environment %q, valid: %s", name, strings.Join(config.EnvironmentNames(), ", "))
+		return "", config.Context{}, fmt.Errorf("unknown context %q, valid: %s", name, strings.Join(config.ContextNames(), ", "))
 	}
-	return env, nil
+	return name, c, nil
+}
+
+// contextName 是 resolveContext 的纯展示姊妹：解析失败时回显 "unknown" 而非报错——
+// 展示场景（鉴权失败引导、whoami）不该因配置问题而无名可显，也不该谎报一个 context。
+func contextName() string {
+	name, _, err := resolveContext()
+	if err != nil {
+		return "unknown"
+	}
+	return name
+}
+
+// sortedKeys 返回 map 的键（字典序），供错误提示稳定输出
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 // resolveChannel 收口发布通道解析：[settings] channel > DefaultChannel。
-// 未知通道名报错（对齐 resolveEnvironment 的未知名报错先例；notifier 侧
+// 未知通道名报错（对齐 resolveContext 的未知名报错先例；notifier 侧
 // 的静默回退是另一职责，见 internal/notifier channelOf）。
 func resolveChannel() (string, error) {
 	settings, err := config.LoadSettings()
@@ -197,11 +215,11 @@ func newClientFromProfile(extra ...api.Option) (*api.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	env, err := resolveEnvironment()
+	_, c, err := resolveContext()
 	if err != nil {
 		return nil, err
 	}
-	server := withGateway(metaServerURL(cp, env))
+	server := withGateway(metaServerURL(cp, c))
 	opts := append([]api.Option{debugOption(), api.WithHeaders(headers)}, extra...)
 	return api.New(server, token, opts...), nil
 }
@@ -223,10 +241,10 @@ func newRepoClientFromProfile() (*api.Client, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	env, err := resolveEnvironment()
+	_, c, err := resolveContext()
 	if err != nil {
 		return nil, "", err
 	}
-	server := withGateway(repoServerURL(cp, env))
+	server := withGateway(repoServerURL(cp, c))
 	return api.New(server, token, debugOption(), api.WithHeaders(headers)), token, nil
 }

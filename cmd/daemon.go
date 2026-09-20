@@ -170,8 +170,8 @@ func newEnrolledDaemon(ctx context.Context, runConfig daemonRunConfig, logger *s
 }
 
 // resolveAgentGatewayServerURL 收口 gateway 地址取值链：
-// --gateway-server-url flag > env MAKE_AGENT_SERVER_URL > 环境 preset（随全局 --env）。
-// 与其余子命令的 URL 解析纪律一致——用户缺省零配置连对环境。
+// --gateway-server-url flag > env MAKE_AGENT_SERVER_URL > context preset（随全局 --context）。
+// 与其余子命令的 URL 解析纪律一致——用户缺省零配置连对后端。
 func resolveAgentGatewayServerURL() (string, error) {
 	if daemonGatewayServerURL != "" {
 		return daemonGatewayServerURL, nil
@@ -179,17 +179,17 @@ func resolveAgentGatewayServerURL() (string, error) {
 	if fromEnv := os.Getenv("MAKE_AGENT_SERVER_URL"); fromEnv != "" {
 		return fromEnv, nil
 	}
-	environment, err := resolveEnvironment()
+	_, c, err := resolveContext()
 	if err != nil {
 		return "", err
 	}
-	return environment.AgentGatewayURL, nil
+	return c.AgentGatewayURL, nil
 }
 
 func init() {
 	// PersistentFlags：start 子命令要用完全同一套旋钮把前台形态固化进 plist，
 	// 定义一次即父子共享，杜绝两处 flag 定义漂移。
-	daemonCmd.PersistentFlags().StringVar(&daemonGatewayServerURL, "gateway-server-url", "", "Agent 平台 gateway 地址(缺省 MAKE_AGENT_SERVER_URL,再缺省按 --env 环境 preset)")
+	daemonCmd.PersistentFlags().StringVar(&daemonGatewayServerURL, "gateway-server-url", "", "Agent 平台 gateway 地址(缺省 MAKE_AGENT_SERVER_URL,再缺省按 --context preset)")
 	daemonCmd.PersistentFlags().StringVar(&daemonSetupKey, "setup-key", "", "首次入册用的一次性 setup-key(与本地 node key 互斥；重新入册前先 daemon uninstall)")
 	daemonCmd.PersistentFlags().StringVar(&daemonRuntimeName, "name", "", "runtime 名(缺省取 hostname)")
 	daemonCmd.PersistentFlags().StringVar(&daemonWorkDir, "work-dir", "", "工作目录根(缺省 ~/.make/agent/work)")

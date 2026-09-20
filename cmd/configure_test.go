@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 cmd 包内的 mask、validateJWT、validateConfigKey、sampleConfig（包内白盒）
- * [OUTPUT]: 覆盖凭证遮掩、JWT 校验、config key 校验、environment set/get、sample 模板完整性与真实 loader 有效性的单元测试
+ * [OUTPUT]: 覆盖凭证遮掩、JWT 校验、config key 校验、context set/get（含旧键 environment 已非法 key）、sample 模板完整性与真实 loader 有效性的单元测试
  * [POS]: cmd 模块 configure.go 的配套测试
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -86,37 +86,44 @@ func TestValidConfigKeys(t *testing.T) {
 	}
 }
 
-func TestConfigureSetEnvironment(t *testing.T) {
-	t.Run("valid env writes to settings", func(t *testing.T) {
+func TestConfigureSetContext(t *testing.T) {
+	t.Run("valid context writes to settings", func(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
-		if err := runConfigureSet("environment", "test"); err != nil {
+		if err := runConfigureSet("context", "test"); err != nil {
 			t.Fatalf("runConfigureSet: %v", err)
 		}
 		s, err := config.LoadSettings()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if s.Environment != "test" {
-			t.Errorf("settings environment = %q, want test", s.Environment)
+		if s.Context != "test" {
+			t.Errorf("settings context = %q, want test", s.Context)
 		}
 	})
 
-	t.Run("invalid env rejected", func(t *testing.T) {
+	t.Run("invalid context rejected", func(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
-		if err := runConfigureSet("environment", "staging"); err == nil {
-			t.Error("expected error for invalid environment value")
+		if err := runConfigureSet("context", "staging"); err == nil {
+			t.Error("expected error for invalid context value")
+		}
+	})
+
+	t.Run("legacy environment key is no longer a config key", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		if err := runConfigureSet("environment", "test"); err == nil {
+			t.Error("expected unknown-key error for 'environment'")
 		}
 	})
 
 	t.Run("routes to settings regardless of --profile", func(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
 		setProfile(t, "test")
-		if err := runConfigureSet("environment", "production"); err != nil {
+		if err := runConfigureSet("context", "production"); err != nil {
 			t.Fatalf("runConfigureSet: %v", err)
 		}
 		s, _ := config.LoadSettings()
-		if s.Environment != "production" {
-			t.Errorf("environment not written to settings: %q", s.Environment)
+		if s.Context != "production" {
+			t.Errorf("context not written to settings: %q", s.Context)
 		}
 	})
 }
@@ -198,14 +205,14 @@ func TestSampleConfig(t *testing.T) {
 				t.Errorf("sampleConfig missing profile key %q", key)
 			}
 		}
-		for _, key := range []string{"environment", "check-for-updates", "channel"} {
+		for _, key := range []string{"context", "check-for-updates", "channel"} {
 			if !strings.Contains(sampleConfig, key) {
 				t.Errorf("sampleConfig missing settings key %q", key)
 			}
 		}
 	})
 
-	// ---- 有效性：sample 必须被真实 loader 解析，且活跃的 environment 是合法环境名 ----
+	// ---- 有效性：sample 必须被真实 loader 解析，且活跃的 context 是合法 context 名 ----
 	t.Run("parses through real loader with valid active values", func(t *testing.T) {
 		t.Setenv(config.EnvConfigDir, t.TempDir())
 		path, err := config.ConfigPath()
@@ -219,8 +226,11 @@ func TestSampleConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("LoadSettings on sample: %v", err)
 		}
-		if !slices.Contains(config.EnvironmentNames(), s.Environment) {
-			t.Errorf("sample active environment %q not in %v", s.Environment, config.EnvironmentNames())
+		if !slices.Contains(config.ContextNames(), s.Context) {
+			t.Errorf("sample active context %q not in %v", s.Context, config.ContextNames())
+		}
+		if s.Legacy != nil {
+			t.Errorf("sample must not use legacy settings keys: %v", s.Legacy)
 		}
 		if !slices.Contains(config.ChannelNames(), s.Channel) {
 			t.Errorf("sample active channel %q not in %v", s.Channel, config.ChannelNames())
@@ -246,23 +256,23 @@ func TestSampleConfig(t *testing.T) {
 	})
 }
 
-func TestConfigureGetEnvironment(t *testing.T) {
+func TestConfigureGetContext(t *testing.T) {
 	t.Run("default production when unset", func(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
-		out := captureStdout(t, func() { _ = runConfigureGet("environment") })
+		out := captureStdout(t, func() { _ = runConfigureGet("context") })
 		if strings.TrimSpace(out) != "production" {
-			t.Errorf("get environment = %q, want production", strings.TrimSpace(out))
+			t.Errorf("get context = %q, want production", strings.TrimSpace(out))
 		}
 	})
 
 	t.Run("reflects settings value", func(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
-		if err := config.SetSetting("environment", "test"); err != nil {
+		if err := config.SetSetting("context", "test"); err != nil {
 			t.Fatal(err)
 		}
-		out := captureStdout(t, func() { _ = runConfigureGet("environment") })
+		out := captureStdout(t, func() { _ = runConfigureGet("context") })
 		if strings.TrimSpace(out) != "test" {
-			t.Errorf("get environment = %q, want test", strings.TrimSpace(out))
+			t.Errorf("get context = %q, want test", strings.TrimSpace(out))
 		}
 	})
 }

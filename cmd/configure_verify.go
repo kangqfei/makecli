@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 internal/config（LoadConfig）、internal/api（New/WithHeaders）、cmd/client（resolveAccessToken/metaServerURL/resolveEnvironment/tokenSource 常量/EnvAccessToken）、cmd/output（outputJSON/resolveOutputFormat/writeJSON）、encoding/base64、encoding/json、fmt、os、strings、time
+ * [INPUT]: 依赖 internal/config（LoadConfig）、internal/api（New/WithHeaders）、cmd/client（resolveAccessToken/metaServerURL/resolveContext/tokenSource 常量/EnvAccessToken）、cmd/output（outputJSON/resolveOutputFormat/writeJSON）、encoding/base64、encoding/json、fmt、os、strings、time
  * [OUTPUT]: 对外提供 newConfigureVerifyCmd 函数；包内 parseJWTTimeClaims 免验签提取 iat/exp、renewTokenHint 按 token 来源给换 token 指引
  * [POS]: cmd/configure 的 verify 子命令，token 走 resolveAccessToken 取值链（结果带 source 字段），本地 exp fail-closed 判定 + 在线验证 token 有效性并输出 profile 状态
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -142,11 +142,11 @@ func runConfigureVerify(output string) (*verifyResult, error) {
 	}
 
 	// 在线验证：调用 app list(page=1, size=1)；server 走 metaServerURL 取值链
-	env, err := resolveEnvironment()
+	_, c, err := resolveContext()
 	if err != nil {
 		return nil, err
 	}
-	server := metaServerURL(cp, env)
+	server := metaServerURL(cp, c)
 	headers := map[string]string{}
 	if result.TenantID != "" {
 		headers["X-Tenant-ID"] = result.TenantID

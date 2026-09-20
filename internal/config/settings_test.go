@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 config 包内 LoadSettings / LoadConfig / ConfigPath / settingsSection（白盒）
- * [OUTPUT]: 覆盖 [settings] 全局段读取与 profile 解析隔离的单元测试
+ * [INPUT]: 依赖 config 包内 LoadSettings / LoadConfig / MigrateSettings / ConfigPath / settingsSection（白盒）
+ * [OUTPUT]: 覆盖 [settings] 全局段读取、旧键登记与搬家、profile 解析隔离的单元测试
  * [POS]: internal/config 模块 settings.go 的配套测试
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -103,15 +103,15 @@ func TestSaveConfig_PreservesSettings(t *testing.T) {
 	}
 }
 
-func TestLoadSettings_Environment(t *testing.T) {
+func TestLoadSettings_Context(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	writeConfigFile(t, "[settings]\nenvironment = test\n")
+	writeConfigFile(t, "[settings]\ncontext = test\n")
 	s, err := LoadSettings()
 	if err != nil {
 		t.Fatalf("LoadSettings: %v", err)
 	}
-	if s.Environment != "test" {
-		t.Errorf("Environment = %q, want test", s.Environment)
+	if s.Context != "test" {
+		t.Errorf("Context = %q, want test", s.Context)
 	}
 }
 
@@ -120,7 +120,7 @@ func TestSetSetting_WritesAndPreserves(t *testing.T) {
 	// 预置：一个 profile + 一个已有 settings 键
 	writeConfigFile(t, "[settings]\ncheck-for-updates = false\n\n[default]\nmeta-server-url = https://x/api/make\n")
 
-	if err := SetSetting("environment", "production"); err != nil {
+	if err := SetSetting("context", "production"); err != nil {
 		t.Fatalf("SetSetting: %v", err)
 	}
 
@@ -128,8 +128,8 @@ func TestSetSetting_WritesAndPreserves(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSettings: %v", err)
 	}
-	if s.Environment != "production" {
-		t.Errorf("Environment = %q, want production", s.Environment)
+	if s.Context != "production" {
+		t.Errorf("Context = %q, want production", s.Context)
 	}
 	// 既有 settings 键保留
 	if s.CheckForUpdates == nil || *s.CheckForUpdates != false {
@@ -147,16 +147,109 @@ func TestSetSetting_WritesAndPreserves(t *testing.T) {
 
 func TestSetSetting_NoExistingFile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	if err := SetSetting("environment", "test"); err != nil {
+	if err := SetSetting("context", "test"); err != nil {
 		t.Fatalf("SetSetting: %v", err)
 	}
 	s, err := LoadSettings()
 	if err != nil {
 		t.Fatalf("LoadSettings: %v", err)
 	}
-	if s.Environment != "test" {
-		t.Errorf("Environment = %q, want test", s.Environment)
+	if s.Context != "test" {
+		t.Errorf("Context = %q, want test", s.Context)
 	}
+}
+
+func TestLoadSettings_LegacyKeys(t *testing.T) {
+	t.Run("legacy environment key is registered not translated", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		writeConfigFile(t, "[settings]\nenvironment = dev\n")
+		s, err := LoadSettings()
+		if err != nil {
+			t.Fatalf("LoadSettings: %v", err)
+		}
+		if s.Context != "" {
+			t.Errorf("legacy key must not be translated into Context, got %q", s.Context)
+		}
+		if s.Legacy["environment"] != "dev" {
+			t.Errorf("Legacy = %v, want environment=dev", s.Legacy)
+		}
+	})
+
+	t.Run("no legacy keys leaves Legacy nil", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		writeConfigFile(t, "[settings]\ncontext = dev\n")
+		s, err := LoadSettings()
+		if err != nil {
+			t.Fatalf("LoadSettings: %v", err)
+		}
+		if s.Legacy != nil {
+			t.Errorf("Legacy should be nil, got %v", s.Legacy)
+		}
+	})
+}
+
+func TestMigrateSettings(t *testing.T) {
+	t.Run("moves environment to context and preserves the rest", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		writeConfigFile(t, "[settings]\nenvironment = dev\ncheck-for-updates = false\n\n[default]\nX-Tenant-ID = t1\n")
+
+		moved, err := MigrateSettings()
+		if err != nil {
+			t.Fatalf("MigrateSettings: %v", err)
+		}
+		if moved["environment"] != "context" {
+			t.Errorf("moved = %v, want environment→context", moved)
+		}
+		s, err := LoadSettings()
+		if err != nil {
+			t.Fatalf("LoadSettings: %v", err)
+		}
+		if s.Context != "dev" {
+			t.Errorf("Context = %q, want dev", s.Context)
+		}
+		if s.Legacy != nil {
+			t.Errorf("legacy key should be gone, got %v", s.Legacy)
+		}
+		if s.CheckForUpdates == nil || *s.CheckForUpdates {
+			t.Errorf("check-for-updates lost across migration: %v", s.CheckForUpdates)
+		}
+		cfg, _ := LoadConfig()
+		if cfg["default"].XTenantID != "t1" {
+			t.Errorf("profile lost across migration: %+v", cfg["default"])
+		}
+	})
+
+	t.Run("new key wins when both present", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		writeConfigFile(t, "[settings]\nenvironment = dev\ncontext = test\n")
+
+		moved, err := MigrateSettings()
+		if err != nil {
+			t.Fatalf("MigrateSettings: %v", err)
+		}
+		if moved["environment"] != "context" {
+			t.Errorf("moved = %v, want environment→context", moved)
+		}
+		s, _ := LoadSettings()
+		if s.Context != "test" {
+			t.Errorf("Context = %q, want test (new key must win)", s.Context)
+		}
+		if s.Legacy != nil {
+			t.Errorf("legacy key should be gone, got %v", s.Legacy)
+		}
+	})
+
+	t.Run("nothing to migrate returns empty", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		writeConfigFile(t, "[settings]\ncontext = dev\n")
+		moved, err := MigrateSettings()
+		if err != nil {
+			t.Fatalf("MigrateSettings: %v", err)
+		}
+		if len(moved) != 0 {
+			t.Errorf("moved = %v, want empty", moved)
+		}
+	})
 }
 
 func TestValidateProfileName(t *testing.T) {

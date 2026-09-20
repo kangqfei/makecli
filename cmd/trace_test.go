@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 trace.go 的 traceURL / traceWindow / traceCmd 与 openBrowserFunc / nowFunc 桩点；setEnvFlag 测试辅助；internal/config 隔离
+ * [INPUT]: 依赖 trace.go 的 traceURL / traceWindow / traceCmd 与 openBrowserFunc / nowFunc 桩点；setContextFlag 测试辅助；internal/config 隔离
  * [OUTPUT]: 对外提供 trace 子命令的单元测试
  * [POS]: cmd 模块 trace.go 的配套测试：锁定 URL 生成规则（微秒时间戳、from<to、默认 10 分钟窗口）与环境→OpenObserve 基址映射
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -68,15 +68,15 @@ func TestTraceRequiresID(t *testing.T) {
 	}
 }
 
-func TestTraceOpensBrowserByEnvironment(t *testing.T) {
+func TestTraceOpensBrowserByContext(t *testing.T) {
 	t.Setenv("MAKE_CLI_CONFIG_DIR", t.TempDir())
 	oldOpen, oldNow := openBrowserFunc, nowFunc
 	t.Cleanup(func() { openBrowserFunc, nowFunc = oldOpen, oldNow })
 	nowFunc = func() time.Time { return time.UnixMicro(1789563655676458) }
 
 	tests := []struct {
-		environment string
-		wantHost    string
+		context  string
+		wantHost string
 	}{
 		{"dev", "openobserve.qtech.cn"},
 		{"test", "openobserve.qtech.cn"},
@@ -85,27 +85,27 @@ func TestTraceOpensBrowserByEnvironment(t *testing.T) {
 	for _, tt := range tests {
 		var opened string
 		openBrowserFunc = func(u string) error { opened = u; return nil }
-		setEnvFlag(t, tt.environment)
+		setContextFlag(t, tt.context)
 
 		var out bytes.Buffer
 		traceCmd.SetOut(&out)
 		setTraceFlags(t, "abc123", 0, 1, 0)
 		if err := traceCmd.RunE(traceCmd, nil); err != nil {
-			t.Fatalf("%s: %v", tt.environment, err)
+			t.Fatalf("%s: %v", tt.context, err)
 		}
 		u, err := url.Parse(opened)
 		if err != nil {
-			t.Fatalf("%s: bad url %q: %v", tt.environment, opened, err)
+			t.Fatalf("%s: bad url %q: %v", tt.context, opened, err)
 		}
 		if u.Host != tt.wantHost {
-			t.Fatalf("%s: host = %q, want %q", tt.environment, u.Host, tt.wantHost)
+			t.Fatalf("%s: host = %q, want %q", tt.context, u.Host, tt.wantHost)
 		}
 		q := u.Query()
 		if q.Get("trace_id") != "abc123" || q.Get("to") != "1789563655676458" || q.Get("from") != "1789560055676458" {
-			t.Fatalf("%s: query = %v", tt.environment, q)
+			t.Fatalf("%s: query = %v", tt.context, q)
 		}
 		if strings.TrimSpace(out.String()) != opened {
-			t.Fatalf("%s: stdout 应回显 URL: %q", tt.environment, out.String())
+			t.Fatalf("%s: stdout 应回显 URL: %q", tt.context, out.String())
 		}
 	}
 }

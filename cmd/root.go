@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 依赖 github.com/spf13/cobra、github.com/spf13/pflag、os、strings、internal/config（EnvironmentNames/DefaultEnvironment）、internal/notifier
- * [OUTPUT]: 对外提供 Execute 函数、rootCmd 根命令、全局变量 Profile / AccessToken / MetaServerURL / Environment / DebugMode；包内 commandName 解析器（Execute 前解析顶级命令名喂给 notifier.Start）、installUsageTemplate（usageTemplate + 模板函数装配，根 help 尾附 skills 安装引导）
- * [POS]: cmd 模块的入口，挂载 version / configure / login / whoami / app / entity / relation / record / apply / diff / update / skills / schema / integration / preflight 子命令；定义全局 --profile / --access-token / --meta-server-url / --env / --debug PersistentFlag；后端 URL 兜底交给 config.Environment preset；错误呈现经 reportExecuteError 单一出口（SilenceErrors，见 errors.go）
+ * [INPUT]: 依赖 github.com/spf13/cobra、github.com/spf13/pflag、os、strings、internal/config（ContextNames/DefaultContext）、internal/notifier
+ * [OUTPUT]: 对外提供 Execute 函数、rootCmd 根命令、全局变量 Profile / AccessToken / MetaServerURL / Context / DebugMode；包内 commandName 解析器（Execute 前解析顶级命令名喂给 notifier.Start）、installUsageTemplate（usageTemplate + 模板函数装配，根 help 尾附 skills 安装引导）
+ * [POS]: cmd 模块的入口，挂载 version / configure / context / doctor / login / whoami / app / entity / relation / record / apply / diff / update / skills / schema / integration / preflight 子命令；定义全局 --profile / --access-token / --meta-server-url / --context / --debug PersistentFlag；后端 URL 兜底交给 config.Context preset；错误呈现经 reportExecuteError 单一出口（SilenceErrors，见 errors.go）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -31,9 +31,10 @@ var Profile = "default"
 // 取值链收口在 client.go resolveAccessToken；flag 值会留在 shell history / ps，CI 应优先用环境变量。
 var AccessToken string
 
-// Environment 全局环境名（--env）。空串 = 回退 [settings] environment 或 config.DefaultEnvironment。
-// 后端 URL 三件套由当前环境的 config.Environment preset 兜底（见 client.go resolveEnvironment）。
-var Environment string
+// Context 全局后端 context 名（--context）。空串 = 回退 $MAKE_CLI_CONTEXT > [settings] context > config.DefaultContext。
+// 后端 URL 五件套由当前 context 的 config.Context preset 兜底（见 client.go resolveContext）。
+// 词汇约定：context 选 Make 后端（dev/test/production）；environment 只指 app 的部署环境（beta/production，app deploy/delete 的 --env）。
+var Context string
 
 var rootCmd = &cobra.Command{
 	Use:   "makecli",
@@ -108,9 +109,11 @@ func Execute(version, buildDate string) error {
 	rootCmd.PersistentFlags().StringVar(&MetaServerURL, "meta-server-url", "", "Meta Server base URL (overrides $"+EnvMetaServerURL+" and the profile config)")
 	rootCmd.PersistentFlags().StringVar(&Profile, "profile", "default", "credentials profile to use")
 	rootCmd.PersistentFlags().StringVarP(&AccessToken, "access-token", "t", "", "access token (overrides $"+EnvAccessToken+" and the profile credentials)")
-	rootCmd.PersistentFlags().StringVar(&Environment, "env", "", "backend environment "+strings.Join(config.EnvironmentNames(), "|")+" (overrides [settings] environment, default "+config.DefaultEnvironment+")")
+	rootCmd.PersistentFlags().StringVar(&Context, "context", "", "backend context "+strings.Join(config.ContextNames(), "|")+" (overrides $"+EnvContext+" and [settings] context, default "+config.DefaultContext+")")
 	rootCmd.AddCommand(newVersionCmd(version, buildDate))
 	rootCmd.AddCommand(newConfigureCmd())
+	rootCmd.AddCommand(newContextCmd())
+	rootCmd.AddCommand(newDoctorCmd())
 	rootCmd.AddCommand(newLoginCmd())
 	rootCmd.AddCommand(newWhoamiCmd())
 	rootCmd.AddCommand(newApplyCmd())

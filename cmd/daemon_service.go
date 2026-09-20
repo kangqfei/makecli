@@ -209,8 +209,8 @@ func buildLaunchdConfig(runConfig daemonRunConfig) (launchd.Config, error) {
 		env[config.EnvConfigDir] = configDir
 	}
 
-	// 全局 flag 在子命令前，与用户手敲的形态一致；--env 不必带——
-	// gateway 地址已解析成绝对值写进参数，不再依赖环境 preset。
+	// 全局 flag 在子命令前，与用户手敲的形态一致；--context 不必带——
+	// gateway 地址已解析成绝对值写进参数，不再依赖 context preset。
 	//
 	// --foreground 不可省：`makecli daemon` 缺省是"托管到 launchd"，
 	// 少了它 launchd 拉起的进程会转头再托管一次自己——无限套娃。
