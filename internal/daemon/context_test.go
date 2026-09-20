@@ -7,6 +7,8 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -65,7 +67,9 @@ func TestSharedExecutionClientCarriesTenantThroughLifecycle(t *testing.T) {
 		var data any = map[string]any{}
 		switch r.URL.Path {
 		case PathPrefix + "/context-window":
-			data = ContextPack{Blocks: []ContextBlock{{Role: "user", Content: "current input"}}}
+			data = ContextPack{Namespace: contextFixtureNamespace(r)}
+		case PathPrefix + "/context-view":
+			data = contextInputFixture(r, []ContextBlock{{Role: "user", Content: "current input"}})
 		case PathPrefix + "/run-claim":
 			data = RenewClaimResponse{LeaseExpiresAt: time.Now().Add(time.Minute)}
 		case PathPrefix + "/event":
@@ -101,7 +105,7 @@ func TestSharedExecutionClientCarriesTenantThroughLifecycle(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(paths) != 5 {
+	if len(paths) != 7 {
 		t.Fatalf("incomplete lifecycle: %v", paths)
 	}
 }
@@ -159,4 +163,28 @@ func TestExecutionClientsKeepConcurrentTenantsSeparate(t *testing.T) {
 	if _, err := node.forExecution(RunClaim{}); err == nil {
 		t.Fatal("invalid claim accepted")
 	}
+}
+
+func contextFixtureNamespace(r *http.Request) ContextNamespace {
+	return ContextNamespace{TenantID: r.Header.Get("X-Tenant-ID"), UserID: r.Header.Get("X-Context-User-ID"), ProductKey: r.Header.Get("X-Context-Product-Key"), AgentKey: r.Header.Get("X-Context-Agent-Key")}
+}
+func contextInputFixture(r *http.Request, blocks []ContextBlock, body ...[]byte) any {
+	var raw []byte
+	if len(body) > 0 {
+		raw = body[0]
+	} else {
+		raw, _ = io.ReadAll(r.Body)
+	}
+	var request ContextReadRequest
+	_ = json.Unmarshal(raw, &request)
+	inputs := []any{}
+	selected := []ContextBlock{}
+	for index, block := range blocks {
+		id := fmt.Sprintf("input_%d", index)
+		inputs = append(inputs, map[string]string{"id": id, "digestSha256": strings.Repeat("a", 64)})
+		if request.Source != nil && request.Source.InputPartID == id {
+			selected = append(selected, block)
+		}
+	}
+	return map[string]any{"turn": map[string]any{"inputParts": inputs}, "context": ContextPack{Namespace: contextFixtureNamespace(r), Blocks: selected}}
 }

@@ -63,7 +63,9 @@ func newCompletionGateway(t *testing.T, renewalDenied bool, appendMode string, a
 			gateway.statuses = append(gateway.statuses, request)
 			gateway.mu.Unlock()
 		case PathPrefix + "/context-window":
-			data = ContextPack{Blocks: []ContextBlock{{Role: "user", Content: "Please produce a report."}}}
+			data = ContextPack{Namespace: contextFixtureNamespace(r)}
+		case PathPrefix + "/context-view":
+			data = contextInputFixture(r, []ContextBlock{{Role: "user", Content: "Please produce a report."}})
 		case PathPrefix + "/run-claim":
 			if gateway.renewalDenied {
 				w.WriteHeader(http.StatusServiceUnavailable)
