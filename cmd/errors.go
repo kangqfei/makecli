@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 errors、fmt、io，依赖 internal/api 的 ErrAuthFailed；读取全局 Profile 与 contextName() / accessTokenSource()
- * [OUTPUT]: 对外提供 reportExecuteError（CLI 错误呈现单一出口）、authFailedHint（鉴权引导文案）、ExitCode（错误→退出码翻译：0 成功 / 2 构建未成功 / 124 等待超时 / 其余 1）
+ * [OUTPUT]: 对外提供 reportExecuteError（CLI 错误呈现单一出口）、authFailedHint（鉴权引导文案）、ExitCode（错误→退出码翻译：0 成功 / 2 构建或发布未成功（errBuildFailed/errPromoteFailed） / 124 等待超时 / 其余 1）
  * [POS]: cmd 模块错误呈现的单一出口，被 root.go Execute 调用；收口原 diff/preflight 各自 SilenceErrors+自打印的特例；ExitCode 被 main 消费，语义化退出码让 CI/agent 免解析文本
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -34,13 +34,13 @@ func reportExecuteError(w io.Writer, err error) {
 }
 
 // ExitCode 把 Execute 返回的错误翻译成进程退出码（main 的唯一消费点）：
-// 0 成功；2 构建未成功（--wait 等到 FAILED/CANCELED）；124 等待超时（沿用 GNU timeout 惯例）；
+// 0 成功；2 构建/发布未成功（deploy/promote --wait 等到非成功终态）；124 等待超时（沿用 GNU timeout 惯例）；
 // 其余一律 1。CI 与 agent 靠退出码判定结果，不必解析输出文本。
 func ExitCode(err error) int {
 	switch {
 	case err == nil:
 		return 0
-	case errors.Is(err, errBuildFailed):
+	case errors.Is(err, errBuildFailed), errors.Is(err, errPromoteFailed):
 		return 2
 	case errors.Is(err, errWaitTimeout):
 		return 124
