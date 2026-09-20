@@ -206,7 +206,37 @@ type ContextToolResult struct {
 }
 
 type ContextPack struct {
-	Blocks []ContextBlock `json:"blocks"`
+	Blocks        []ContextBlock   `json:"blocks"`
+	Namespace     ContextNamespace `json:"namespace"`
+	NextPageToken string           `json:"nextPageToken,omitempty"`
+}
+
+type ContextSourceRef struct {
+	Kind         string           `json:"kind"`
+	Namespace    ContextNamespace `json:"namespace"`
+	SessionID    string           `json:"sessionId"`
+	TurnID       string           `json:"turnId"`
+	InputPartID  string           `json:"inputPartId"`
+	DigestSHA256 string           `json:"digestSha256"`
+}
+
+type ContextReadRequest struct {
+	Namespace ContextNamespace  `json:"namespace"`
+	SessionID string            `json:"sessionId"`
+	TurnID    string            `json:"turnId"`
+	View      string            `json:"view"`
+	Source    *ContextSourceRef `json:"source,omitempty"`
+	PageToken string            `json:"pageToken,omitempty"`
+}
+
+type ContextReadResult struct {
+	Turn *struct {
+		InputParts []struct {
+			ID           string `json:"id"`
+			DigestSHA256 string `json:"digestSha256"`
+		} `json:"inputParts"`
+	} `json:"turn,omitempty"`
+	Context *ContextPack `json:"context,omitempty"`
 }
 
 type RenewClaimRequest struct {

@@ -53,7 +53,10 @@ func newFakeGateway(t *testing.T) *fakeGateway {
 			if r.Header.Get("X-Context-Execution-ID") == "" || r.Header.Get("X-Context-Lease-Token") == "" {
 				t.Error("window request missing execution authorization")
 			}
-			data = ContextPack{Blocks: fake.blocks}
+			data = ContextPack{Namespace: contextFixtureNamespace(r)}
+		}
+		if r.URL.Path == PathPrefix+"/context-view" {
+			data = contextInputFixture(r, fake.blocks, body)
 		}
 		if r.URL.Path == PathPrefix+"/"+ResourceEvent && target == TargetCreateResource {
 			var request CreateEventsRequest

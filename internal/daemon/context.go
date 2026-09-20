@@ -1,5 +1,5 @@
 // [INPUT]: 平台 Claim 的独立执行、当前租约与四维调用范围。
-// [OUTPUT]: 授权文本窗口及类型化工具历史的引用呈现，不重放工具或回落旧 CLI 会话。
+// [OUTPUT]: Fill 补充材料和 Read 当前输入分页装配；类型化工具历史的引用呈现，不重放工具或回落旧 CLI 会话。
 // [POS]: 公开 CLI 的协议镜像消费端，不导入私有服务模块，也不自行扩大来源权限。
 // [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 package daemon
@@ -43,7 +43,57 @@ func (c *Client) ReadContext(ctx context.Context, claim RunClaim) (ContextPack, 
 		CurrentTurnID string           `json:"currentTurnId"`
 	}{identity, claim.Context.SessionID, "fill", claim.Context.TurnID}
 	err = scoped.callWithHeaders(ctx, "context-window", TargetCreateResource, request, &result, headers)
-	return result, err
+	if err != nil {
+		return result, err
+	}
+	if result.Namespace != identity {
+		return ContextPack{}, fmt.Errorf("上下文窗口归属不匹配")
+	}
+	read := ContextReadRequest{Namespace: identity, SessionID: claim.Context.SessionID, TurnID: claim.Context.TurnID, View: "turn"}
+	var turn ContextReadResult
+	if err := scoped.callWithHeaders(ctx, "context-view", TargetGetResource, read, &turn, headers); err != nil {
+		return ContextPack{}, err
+	}
+	if turn.Turn == nil || len(turn.Turn.InputParts) == 0 {
+		return ContextPack{}, fmt.Errorf("当前 Turn 没有输入")
+	}
+	read.View = "context"
+	totalBytes := 0
+	for _, part := range turn.Turn.InputParts {
+		read.Source = &ContextSourceRef{Kind: "turn_input", Namespace: identity, SessionID: read.SessionID, TurnID: read.TurnID, InputPartID: part.ID, DigestSHA256: part.DigestSHA256}
+		read.PageToken = ""
+		var text strings.Builder
+		var parts []Block
+		for page := 0; ; page++ {
+			if page >= 1024 {
+				return ContextPack{}, fmt.Errorf("当前输入分页超限")
+			}
+			var response ContextReadResult
+			if err := scoped.callWithHeaders(ctx, "context-view", TargetGetResource, read, &response, headers); err != nil {
+				return ContextPack{}, err
+			}
+			if response.Context == nil || response.Context.Namespace != identity {
+				return ContextPack{}, fmt.Errorf("当前输入缺失或归属不匹配")
+			}
+			for _, block := range response.Context.Blocks {
+				text.WriteString(block.Content)
+				parts = append(parts, block.Parts...)
+				totalBytes += len(block.Content)
+			}
+			if totalBytes > 4<<20 {
+				return ContextPack{}, fmt.Errorf("当前输入超过读取上限")
+			}
+			if response.Context.NextPageToken == "" {
+				break
+			}
+			if response.Context.NextPageToken == read.PageToken {
+				return ContextPack{}, fmt.Errorf("当前输入分页未前进")
+			}
+			read.PageToken = response.Context.NextPageToken
+		}
+		result.Blocks = append(result.Blocks, ContextBlock{Role: "user", Content: text.String(), Parts: parts})
+	}
+	return result, nil
 }
 
 func BuildContextPrompt(pack ContextPack) (string, error) {

@@ -7,6 +7,8 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -65,7 +67,9 @@ func TestSharedExecutionClientCarriesTenantThroughLifecycle(t *testing.T) {
 		var data any = map[string]any{}
 		switch r.URL.Path {
 		case PathPrefix + "/context-window":
-			data = ContextPack{Blocks: []ContextBlock{{Role: "user", Content: "current input"}}}
+			data = ContextPack{Namespace: contextFixtureNamespace(r)}
+		case PathPrefix + "/context-view":
+			data = contextInputFixture(r, []ContextBlock{{Role: "user", Content: "current input"}})
 		case PathPrefix + "/run-claim":
 			data = RenewClaimResponse{LeaseExpiresAt: time.Now().Add(time.Minute)}
 		case PathPrefix + "/event":
@@ -101,8 +105,151 @@ func TestSharedExecutionClientCarriesTenantThroughLifecycle(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(paths) != 5 {
+	if len(paths) != 7 {
 		t.Fatalf("incomplete lifecycle: %v", paths)
+	}
+}
+
+func TestReadContextReadsAllInputPartsAcrossPagesInOrder(t *testing.T) {
+	claim := testClaim()
+	var requests []ContextReadRequest
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var data any = map[string]any{}
+		switch r.URL.Path {
+		case PathPrefix + "/context-window":
+			data = ContextPack{Namespace: contextFixtureNamespace(r), Blocks: []ContextBlock{{Role: "context", Content: "history"}}}
+		case PathPrefix + "/context-view":
+			var request ContextReadRequest
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &request)
+			mu.Lock()
+			requests = append(requests, request)
+			mu.Unlock()
+			if request.View == "turn" {
+				data = ContextReadResult{Turn: &struct {
+					InputParts []struct {
+						ID           string `json:"id"`
+						DigestSHA256 string `json:"digestSha256"`
+					} `json:"inputParts"`
+				}{InputParts: []struct {
+					ID           string `json:"id"`
+					DigestSHA256 string `json:"digestSha256"`
+				}{
+					{ID: "input_0", DigestSHA256: strings.Repeat("0", 64)},
+					{ID: "input_1", DigestSHA256: strings.Repeat("1", 64)},
+				}}}
+			} else {
+				switch {
+				case request.Source == nil:
+					t.Error("context read missing source")
+				case request.Source.InputPartID == "input_0" && request.Source.DigestSHA256 != strings.Repeat("0", 64):
+					t.Error("input_0 digest changed")
+				case request.Source.InputPartID == "input_1" && request.Source.DigestSHA256 != strings.Repeat("1", 64):
+					t.Error("input_1 digest changed")
+				}
+				switch {
+				case request.Source != nil && request.Source.InputPartID == "input_0" && request.PageToken == "":
+					data = ContextReadResult{Context: &ContextPack{Namespace: contextFixtureNamespace(r), Blocks: []ContextBlock{{Role: "user", Content: "first-"}}, NextPageToken: "input0-page2"}}
+				case request.Source != nil && request.Source.InputPartID == "input_0" && request.PageToken == "input0-page2":
+					data = ContextReadResult{Context: &ContextPack{Namespace: contextFixtureNamespace(r), Blocks: []ContextBlock{{Role: "user", Content: "page2"}}}}
+				case request.Source != nil && request.Source.InputPartID == "input_1" && request.PageToken == "":
+					data = ContextReadResult{Context: &ContextPack{Namespace: contextFixtureNamespace(r), Blocks: []ContextBlock{{Role: "user", Content: "second"}}}}
+				default:
+					t.Errorf("unexpected context read: %+v", request)
+				}
+			}
+		}
+		encoded, _ := json.Marshal(data)
+		_ = json.NewEncoder(w).Encode(Envelope{Code: 200, Data: encoded})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "synthetic-node-key")
+	pack, err := client.ReadContext(context.Background(), claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pack.Blocks) != 3 || pack.Blocks[0].Content != "history" || pack.Blocks[1].Content != "first-page2" || pack.Blocks[2].Content != "second" {
+		t.Fatalf("blocks = %+v, want Fill history followed by complete current input parts", pack.Blocks)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requests) != 4 {
+		t.Fatalf("context requests = %d, want turn + two pages + second input", len(requests))
+	}
+	if requests[1].Source == nil || requests[1].Source.InputPartID != "input_0" || requests[1].PageToken != "" ||
+		requests[2].Source == nil || requests[2].Source.InputPartID != "input_0" || requests[2].PageToken != "input0-page2" ||
+		requests[3].Source == nil || requests[3].Source.InputPartID != "input_1" || requests[3].PageToken != "" {
+		t.Fatalf("current input pagination/order not preserved: %+v", requests)
+	}
+}
+
+func TestReadContextRejectsNonAdvancingCursorAndWrongNamespace(t *testing.T) {
+	for name, responseNamespace := range map[string]ContextNamespace{
+		"wrong_namespace": {TenantID: "tenant_other", UserID: "user", ProductKey: "product", AgentKey: "agent"},
+		"same_cursor":     {TenantID: "tenant", UserID: "agent_account", ProductKey: "product", AgentKey: "agent"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			claim := testClaim()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var data any = map[string]any{}
+				switch r.URL.Path {
+				case PathPrefix + "/context-window":
+					data = ContextPack{Namespace: contextFixtureNamespace(r)}
+				case PathPrefix + "/context-view":
+					var request ContextReadRequest
+					body, _ := io.ReadAll(r.Body)
+					_ = json.Unmarshal(body, &request)
+					switch {
+					case request.View == "turn":
+						data = ContextReadResult{Turn: &struct {
+							InputParts []struct {
+								ID           string `json:"id"`
+								DigestSHA256 string `json:"digestSha256"`
+							} `json:"inputParts"`
+						}{InputParts: []struct {
+							ID           string `json:"id"`
+							DigestSHA256 string `json:"digestSha256"`
+						}{
+							{ID: "input_0", DigestSHA256: strings.Repeat("0", 64)},
+						}}}
+					case name == "wrong_namespace":
+						data = ContextReadResult{Context: &ContextPack{Namespace: responseNamespace, Blocks: []ContextBlock{{Role: "user", Content: "wrong"}}}}
+					default:
+						data = ContextReadResult{Context: &ContextPack{Namespace: contextFixtureNamespace(r), Blocks: []ContextBlock{{Role: "user", Content: "page"}}, NextPageToken: "same"}}
+					}
+				}
+				encoded, _ := json.Marshal(data)
+				_ = json.NewEncoder(w).Encode(Envelope{Code: 200, Data: encoded})
+			}))
+			defer server.Close()
+			client := NewClient(server.URL, "synthetic-node-key")
+			if _, err := client.ReadContext(context.Background(), claim); err == nil {
+				t.Fatal("invalid namespace/cursor response accepted")
+			}
+		})
+	}
+}
+
+func TestContextWireShapesRemainCompatible(t *testing.T) {
+	read := ContextReadRequest{
+		Namespace: ContextNamespace{TenantID: "tenant", UserID: "user", ProductKey: "product", AgentKey: "agent"},
+		SessionID: "session", TurnID: "turn", View: "context", PageToken: "cursor",
+		Source: &ContextSourceRef{Kind: "turn_input", Namespace: ContextNamespace{TenantID: "tenant", UserID: "user", ProductKey: "product", AgentKey: "agent"}, SessionID: "session", TurnID: "turn", InputPartID: "input", DigestSHA256: strings.Repeat("a", 64)},
+	}
+	raw, err := json.Marshal(read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"namespace":{"tenantId":"tenant","userId":"user","productKey":"product","agentKey":"agent"},"sessionId":"session","turnId":"turn","view":"context","source":{"kind":"turn_input","namespace":{"tenantId":"tenant","userId":"user","productKey":"product","agentKey":"agent"},"sessionId":"session","turnId":"turn","inputPartId":"input","digestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"pageToken":"cursor"}`
+	if string(raw) != want {
+		t.Fatalf("ContextReadRequest wire drift: got %s want %s", raw, want)
+	}
+	var decoded ContextReadRequest
+	if err := json.Unmarshal([]byte(want), &decoded); err != nil || decoded.Source == nil || decoded.Source.DigestSHA256 != strings.Repeat("a", 64) {
+		t.Fatalf("ContextReadRequest golden decode failed: %+v %v", decoded, err)
 	}
 }
 
@@ -159,4 +306,28 @@ func TestExecutionClientsKeepConcurrentTenantsSeparate(t *testing.T) {
 	if _, err := node.forExecution(RunClaim{}); err == nil {
 		t.Fatal("invalid claim accepted")
 	}
+}
+
+func contextFixtureNamespace(r *http.Request) ContextNamespace {
+	return ContextNamespace{TenantID: r.Header.Get("X-Tenant-ID"), UserID: r.Header.Get("X-Context-User-ID"), ProductKey: r.Header.Get("X-Context-Product-Key"), AgentKey: r.Header.Get("X-Context-Agent-Key")}
+}
+func contextInputFixture(r *http.Request, blocks []ContextBlock, body ...[]byte) any {
+	var raw []byte
+	if len(body) > 0 {
+		raw = body[0]
+	} else {
+		raw, _ = io.ReadAll(r.Body)
+	}
+	var request ContextReadRequest
+	_ = json.Unmarshal(raw, &request)
+	inputs := []any{}
+	selected := []ContextBlock{}
+	for index, block := range blocks {
+		id := fmt.Sprintf("input_%d", index)
+		inputs = append(inputs, map[string]string{"id": id, "digestSha256": strings.Repeat("a", 64)})
+		if request.Source != nil && request.Source.InputPartID == id {
+			selected = append(selected, block)
+		}
+	}
+	return map[string]any{"turn": map[string]any{"inputParts": inputs}, "context": ContextPack{Namespace: contextFixtureNamespace(r), Blocks: selected}}
 }

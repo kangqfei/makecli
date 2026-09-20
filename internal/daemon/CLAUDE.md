@@ -4,7 +4,7 @@
 外接 brain 的 runtime 接入(agent-design/Design.md §8.1):setup-key 自助入册换回 node key、node key 心跳续活、拉取式 claim 领工作、驱动本机 coding CLI 执行并回写事件流。正确性完全建立在拉取式 claim 上,连接断开只影响延迟。功能未稳定,入口命令(makecli daemon)隐藏。
 
 成员清单
-context.go: 按 Claim 固定执行租户/Execution/generation/租约读取窗口；按角色呈现文本工具调用与结果，保留 outcome_unknown，混合非法内容明确拒绝
+context.go: 按 Claim 固定执行租户/Execution/generation/租约读取 Fill 补充材料，再通过 Read 分页装配当前 Turn 输入；按角色呈现文本工具调用与结果，保留 outcome_unknown，混合非法内容明确拒绝
 context_test.go: 工具历史 JSON 消费、非法块拒绝、shared 全生命周期头和双租户并发路由回归
 completion_test.go: 真实 ClaudeCode adapter 与合成子进程验证续租失败/成功 Result 竞争，以及持久化回执、空结果和 deadline 的终态约束
 lease.go: 执行期间独立续租，取消或失去租约立即终止对应 CLI
