@@ -140,11 +140,12 @@ func TestReadContextReadsAllInputPartsAcrossPagesInOrder(t *testing.T) {
 					{ID: "input_1", DigestSHA256: strings.Repeat("1", 64)},
 				}}}
 			} else {
-				if request.Source == nil {
+				switch {
+				case request.Source == nil:
 					t.Error("context read missing source")
-				} else if request.Source.InputPartID == "input_0" && request.Source.DigestSHA256 != strings.Repeat("0", 64) {
+				case request.Source.InputPartID == "input_0" && request.Source.DigestSHA256 != strings.Repeat("0", 64):
 					t.Error("input_0 digest changed")
-				} else if request.Source.InputPartID == "input_1" && request.Source.DigestSHA256 != strings.Repeat("1", 64) {
+				case request.Source.InputPartID == "input_1" && request.Source.DigestSHA256 != strings.Repeat("1", 64):
 					t.Error("input_1 digest changed")
 				}
 				switch {
@@ -201,7 +202,8 @@ func TestReadContextRejectsNonAdvancingCursorAndWrongNamespace(t *testing.T) {
 					var request ContextReadRequest
 					body, _ := io.ReadAll(r.Body)
 					_ = json.Unmarshal(body, &request)
-					if request.View == "turn" {
+					switch {
+					case request.View == "turn":
 						data = ContextReadResult{Turn: &struct {
 							InputParts []struct {
 								ID           string `json:"id"`
@@ -213,9 +215,9 @@ func TestReadContextRejectsNonAdvancingCursorAndWrongNamespace(t *testing.T) {
 						}{
 							{ID: "input_0", DigestSHA256: strings.Repeat("0", 64)},
 						}}}
-					} else if name == "wrong_namespace" {
+					case name == "wrong_namespace":
 						data = ContextReadResult{Context: &ContextPack{Namespace: responseNamespace, Blocks: []ContextBlock{{Role: "user", Content: "wrong"}}}}
-					} else {
+					default:
 						data = ContextReadResult{Context: &ContextPack{Namespace: contextFixtureNamespace(r), Blocks: []ContextBlock{{Role: "user", Content: "page"}}, NextPageToken: "same"}}
 					}
 				}
