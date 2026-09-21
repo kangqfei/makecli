@@ -40,6 +40,7 @@ type ListRecordOpts struct {
 }
 
 // GroupField 是聚合查询的分组维度（DataAPIDesign「聚合统计 Record 数据」group 元素）：
+// FieldKey 须为 Schema 中 capabilities.aggregable=true 的字段（与列表分组的 groupable 独立，Lookup 按关联 ID 分组），
 // Granularity 仅 Date 字段可用（day/week/month/quarter/year），Alias 缺省时输出列名为 FieldKey；取值合法性由服务端裁决
 type GroupField struct {
 	FieldKey    string `json:"fieldKey"`

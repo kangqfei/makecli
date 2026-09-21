@@ -260,9 +260,11 @@ type Field struct {
 	Meta        map[string]any `json:"meta"`
 	Properties  map[string]any `json:"properties"`
 	Validations map[string]any `json:"validations,omitempty"`
-	// Capabilities 是服务端按字段类型派生的能力位（groupable/sortable/
-	// supportsUniqueConstraint 等）。仅读路径填充；写路径不设置，omitempty
-	// 保证不向线缆发空对象（与 Validations 同款只读透传语义）。
+	// Capabilities 是服务端按字段类型派生的能力位（groupable 列表分组 /
+	// aggregable 聚合维度 / sortable / supportsUniqueConstraint 等）。用 map
+	// 而非结构体：键集合由服务端演进（aggregable 即后加、旧版本可缺失，缺失
+	// ≠ false），CLI 不解释语义只原样透传。仅读路径填充；写路径不设置，
+	// omitempty 保证不向线缆发空对象（与 Validations 同款只读透传语义）。
 	Capabilities map[string]any `json:"capabilities,omitempty"`
 }
 

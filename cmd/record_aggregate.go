@@ -43,6 +43,11 @@ and --aggregates-json the metrics; together they decide the output columns. Omit
 groups after it (HAVING) and may only reference metric aliases. Both are CEL
 expressions evaluated server-side, same dialect as 'record list --filter'.
 
+A group fieldKey must have capabilities.aggregable=true in 'makecli schema' output.
+It is independent of groupable (list grouping): a Lookup field is typically
+aggregable but not groupable, and it groups by the related record ID. Number and
+Currency fields are metric inputs, not dimensions.
+
 JSON flags accept inline JSON, @file, or - for stdin (stdin at most once per call).
 Element shapes (values are validated server-side):
   group:      {"fieldKey": "...", "granularity": "day|week|month|quarter|year", "alias": "..."}

@@ -39,9 +39,9 @@ func TestRunSchema(t *testing.T) {
 					},
 					"entities": []map[string]any{
 						{"key": "expense_report", "name": "报销单", "type": "Make.Entity", "appKey": "expense_management",
-							"meta":       map[string]any{"version": "1.0.0"},
+							"meta": map[string]any{"version": "1.0.0"},
 							"properties": map[string]any{"fields": []map[string]any{{"key": "applicant", "name": "申请人", "type": "Make.Field.Text",
-								"capabilities": map[string]any{"groupable": true, "sortable": true, "supportsUniqueConstraint": false}}}}},
+								"capabilities": map[string]any{"groupable": false, "aggregable": false, "sortable": true, "supportsUniqueConstraint": true}}}}},
 					},
 					"relations": []map[string]any{
 						{"key": "report_has_invoices", "name": "报销单发票关联", "type": "Make.Relation", "appKey": "expense_management",
@@ -81,8 +81,11 @@ func TestRunSchema(t *testing.T) {
 		if !strings.Contains(output, "\"capabilities\"") {
 			t.Fatalf("expected field capabilities in output, got %q", output)
 		}
-		if !strings.Contains(output, "supportsUniqueConstraint") {
-			t.Fatalf("expected capability keys in output, got %q", output)
+		// 键集合由服务端演进（aggregable 后加），CLI 用 map 透传、不做白名单
+		for _, key := range []string{"groupable", "aggregable", "sortable", "supportsUniqueConstraint"} {
+			if !strings.Contains(output, key) {
+				t.Fatalf("expected capability key %q in output, got %q", key, output)
+			}
 		}
 	})
 
