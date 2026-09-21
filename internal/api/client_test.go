@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 internal/api 包内的 Client（包内白盒），encoding/json、errors、net/http、net/http/httptest、testing
- * [OUTPUT]: 覆盖 Client.CreateApp / ListApps / DeleteApp（含成功 data 为标量 true 的写路径）/ WithHeaders / WithDebug / WithDryRun（X-Dry-Run 注入/缺席）/ GetApp / GetEntity / GetRelation（含 ErrNotFound 语义）/ ErrAuthFailed 鉴权语义 / Traceparent+X-Log-Id 出站头 的单元测试
+ * [OUTPUT]: 覆盖 Client.CreateApp / ListApps / DeleteApp（含成功 data 为标量 true 的写路径、?appRole= 断言）/ RoleForEnv（与 HostedEnv 互逆）/ WithHeaders / WithDebug / WithDryRun（X-Dry-Run 注入/缺席）/ GetApp / GetEntity / GetRelation（含 ErrNotFound 语义）/ ErrAuthFailed 鉴权语义 / Traceparent+X-Log-Id 出站头 的单元测试
  * [POS]: internal/api client.go 的配套测试，用 httptest 隔离网络
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -64,6 +64,9 @@ func TestDeleteApp(t *testing.T) {
 			if r.Header.Get("X-Make-Target") != "MakeService.DeleteResource" {
 				t.Errorf("unexpected X-Make-Target: %s", r.Header.Get("X-Make-Target"))
 			}
+			if got := r.URL.Query().Get("appRole"); got != RoleBeta {
+				t.Errorf("appRole query = %q, want %q", got, RoleBeta)
+			}
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			if body["key"] != "myapp" || body["type"] != "Make.App" {
@@ -73,7 +76,7 @@ func TestDeleteApp(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		if err := New(srv.URL, "test-token").DeleteApp("myapp"); err != nil {
+		if err := New(srv.URL, "test-token").DeleteApp("myapp", RoleBeta); err != nil {
 			t.Fatalf("DeleteApp: %v", err)
 		}
 	})
@@ -86,7 +89,7 @@ func TestDeleteApp(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		if err := New(srv.URL, "test-token").DeleteApp("myapp"); err != nil {
+		if err := New(srv.URL, "test-token").DeleteApp("myapp", RoleProd); err != nil {
 			t.Fatalf("DeleteApp: %v", err)
 		}
 	})
@@ -97,7 +100,7 @@ func TestDeleteApp(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		if err := New(srv.URL, "test-token").DeleteApp("myapp"); err == nil {
+		if err := New(srv.URL, "test-token").DeleteApp("myapp", RoleProd); err == nil {
 			t.Fatal("expected error on API failure")
 		}
 	})
@@ -445,6 +448,19 @@ func TestGetRelationNotFoundSemantics(t *testing.T) {
 			t.Fatalf("expected key project_has_tasks, got %q", rel.Key)
 		}
 	})
+}
+
+// RoleForEnv 与 HostedEnv 互为逆映射：任一角色的 app，承载环境再映射回来仍是该角色
+func TestRoleForEnv(t *testing.T) {
+	for _, role := range []string{RoleProd, RoleBeta} {
+		app := &App{Meta: map[string]any{"appRole": role}}
+		if got := RoleForEnv(app.HostedEnv()); got != role {
+			t.Errorf("RoleForEnv(HostedEnv(%s)) = %q, want %q", role, got, role)
+		}
+	}
+	if got := RoleForEnv("unknown"); got != RoleProd {
+		t.Errorf("RoleForEnv(unknown) = %q, want %q", got, RoleProd)
+	}
 }
 
 func TestAppKeyForEnv(t *testing.T) {

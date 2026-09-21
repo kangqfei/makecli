@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 bytes、encoding/json、errors、fmt、io、net/http、strings、time，依赖 debug.go 的 debugSink，依赖 internal/trace 的 TraceID/Traceparent
- * [OUTPUT]: 对外提供 Client 类型、ErrNotFound / ErrAuthFailed 哨兵错误、UniqueConstraintError 类型化错误（409 唯一性冲突，errors.As 判定）、Option / WithDebug(on, DebugFormat) / WithHeaders / WithDryRun 功能选项、New 构造函数、App（Role / PairAppKey / HostedEnv / KeyForEnv：prod/beta 配对知识收口，环境 → 承载 app key）、RoleProd / RoleBeta 常量 / Field / Entity / EntityProperties / UniqueConstraint / RelationEnd / RelationProperties / Relation / Schema 类型、CreateApp(key, name, properties) / ListApps(page, size, filter) / DeleteApp(key) / GetApp(key) / CreateEntity(key, name, appKey, props) / ListEntities(appKey, page, size, filter) / GetEntity(appKey, key) / UpdateEntity(key, name, appKey, props) / DeleteEntity / CreateRelation(key, name, appKey, props) / UpdateRelation / ListRelations(appKey, ...) / GetRelation(appKey, key) / DeleteRelation / GetSchema(appKey) 方法。资源以 Key 为唯一标识符（英数下划线），Name 为用户可见展示名（支持中文）。Get* 方法在资源确实不存在时返回 ErrNotFound（可用 errors.Is 判定），其余错误（传输/非 not-found 业务码/解码）原样返回
+ * [OUTPUT]: 对外提供 Client 类型、ErrNotFound / ErrAuthFailed 哨兵错误、UniqueConstraintError 类型化错误（409 唯一性冲突，errors.As 判定）、Option / WithDebug(on, DebugFormat) / WithHeaders / WithDryRun 功能选项、New 构造函数、App（Role / PairAppKey / HostedEnv / KeyForEnv：prod/beta 配对知识收口，环境 → 承载 app key）、RoleForEnv（HostedEnv 逆映射：环境 → app 角色）、RoleProd / RoleBeta 常量 / Field / Entity / EntityProperties / UniqueConstraint / RelationEnd / RelationProperties / Relation / Schema 类型、CreateApp(key, name, properties) / ListApps(page, size, filter) / DeleteApp(key, role)（?appRole= 由服务端定位配对 app，不反查）/ GetApp(key) / CreateEntity(key, name, appKey, props) / ListEntities(appKey, page, size, filter) / GetEntity(appKey, key) / UpdateEntity(key, name, appKey, props) / DeleteEntity / CreateRelation(key, name, appKey, props) / UpdateRelation / ListRelations(appKey, ...) / GetRelation(appKey, key) / DeleteRelation / GetSchema(appKey) 方法。资源以 Key 为唯一标识符（英数下划线），Name 为用户可见展示名（支持中文）。Get* 方法在资源确实不存在时返回 ErrNotFound（可用 errors.Is 判定），其余错误（传输/非 not-found 业务码/解码）原样返回
  * [POS]: internal/api 的核心，封装 Make Meta Service 的 HTTP 调用
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -182,6 +183,14 @@ func (a *App) HostedEnv() string {
 	return EnvProduction
 }
 
+// RoleForEnv 是 HostedEnv 的逆映射：用户面环境 → 承载它的 app 角色（EnvBeta → RoleBeta，其余 → RoleProd）
+func RoleForEnv(env string) string {
+	if env == EnvBeta {
+		return RoleBeta
+	}
+	return RoleProd
+}
+
 // KeyForEnv 返回承载指定环境（EnvBeta / EnvProduction）的 app key：
 // 本 app 自身承载该环境则是自己，否则是配对 app。代码仓库、部署都挂在承载环境的那个 app 上，
 // 用户只需给一个 key，CLI 据服务端的角色/配对信息定位目标；无配对时报错。
@@ -239,13 +248,15 @@ func (c *Client) ListApps(page, size int, filter string) ([]App, int, error) {
 	return result.Data, result.Pagination.Total, nil
 }
 
-// DeleteApp 调用 MakeService.DeleteResource 删除指定 App（按 key 定位）
-func (c *Client) DeleteApp(key string) error {
+// DeleteApp 调用 MakeService.DeleteResource 删除 App 对中指定角色的一半：
+// key 始终是 prod app key，?appRole=prod|beta 由服务端定位实际删除的 app（beta 即配对 app），
+// CLI 不再反查 meta.pairAppKey。prod 有 beta 配对时服务端 409 拒删须先删 beta。
+func (c *Client) DeleteApp(key, role string) error {
 	body := map[string]any{
 		"key":  key,
 		"type": "Make.App",
 	}
-	return c.post("MakeService.DeleteResource", "/meta/v1/app", body)
+	return c.post("MakeService.DeleteResource", "/meta/v1/app?appRole="+url.QueryEscape(role), body)
 }
 
 // ---------------------------------- Entity 操作 ----------------------------------

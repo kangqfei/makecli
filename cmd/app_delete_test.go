@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 依赖 cmd 包内的 runAppDelete/runAppDeleteFromFile/resolveDeleteSteps/confirmDeleteFunc（包内白盒），internal/api、internal/config、encoding/json、errors、net/http、net/http/httptest、path/filepath、slices
+ * [INPUT]: 依赖 cmd 包内的 runAppDelete/runAppDeleteFromFile/resolveDeleteEnvs/confirmDeleteFunc（包内白盒），internal/api、encoding/json、errors、net/http、net/http/httptest、path/filepath、slices
  * [OUTPUT]: 覆盖 app delete 子命令核心逻辑的单元测试（含 -f 文件模式与删除确认门控）
- * [POS]: cmd 模块 app_delete.go 的配套测试，用 httptest 隔离网络、t.Setenv 隔离凭证、打桩 confirmDeleteFunc 隔离终端交互
+ * [POS]: cmd 模块 app_delete.go 的配套测试，用 httptest 隔离网络（断言删除只走 DeleteResource 且 ?appRole= 与 --env 对应、零 GetResource）、t.Setenv 隔离凭证、打桩 confirmDeleteFunc 隔离终端交互
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -35,7 +35,7 @@ func TestRunAppDelete(t *testing.T) {
 		saveDefaultToken(t)
 		MetaServerURL = srv.URL
 
-		if err := runAppDelete("myapp", appRoleProduction, true); err != nil {
+		if err := runAppDelete("myapp", api.EnvProduction, true); err != nil {
 			t.Fatalf("runAppDelete: %v", err)
 		}
 	})
@@ -48,7 +48,7 @@ func TestRunAppDelete(t *testing.T) {
 		saveDefaultToken(t)
 		MetaServerURL = srv.URL
 
-		if err := runAppDelete("myapp", appRoleProduction, false); err != nil {
+		if err := runAppDelete("myapp", api.EnvProduction, false); err != nil {
 			t.Fatalf("runAppDelete: %v", err)
 		}
 	})
@@ -56,12 +56,12 @@ func TestRunAppDelete(t *testing.T) {
 	t.Run("confirmation refusal stops before API", func(t *testing.T) {
 		sentinel := errors.New("declined")
 		stubConfirm(t, sentinel)
-		// 没有 mock server：production 路径不需反查，确认失败必须在触网前短路
+		// 没有 mock server：删除路径零读请求，确认失败必须在触网前短路
 		t.Setenv("HOME", t.TempDir())
 		saveDefaultToken(t)
 		MetaServerURL = "http://unused"
 
-		if err := runAppDelete("myapp", appRoleProduction, false); !errors.Is(err, sentinel) {
+		if err := runAppDelete("myapp", api.EnvProduction, false); !errors.Is(err, sentinel) {
 			t.Fatalf("expected confirmation error, got %v", err)
 		}
 	})
@@ -70,7 +70,7 @@ func TestRunAppDelete(t *testing.T) {
 		// 不打桩，走真 confirmDeleteByTypingKey；go test 下 stdin 非 TTY，应直接拒绝
 		t.Setenv("HOME", t.TempDir())
 		MetaServerURL = "http://unused"
-		if err := runAppDelete("myapp", appRoleProduction, false); err == nil {
+		if err := runAppDelete("myapp", api.EnvProduction, false); err == nil {
 			t.Fatal("expected refusal without --yes in non-interactive shell")
 		}
 	})
@@ -78,7 +78,7 @@ func TestRunAppDelete(t *testing.T) {
 	t.Run("fails without credentials", func(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
 		MetaServerURL = "http://unused"
-		if err := runAppDelete("myapp", appRoleProduction, true); err == nil {
+		if err := runAppDelete("myapp", api.EnvProduction, true); err == nil {
 			t.Fatal("expected error for missing credentials")
 		}
 	})
@@ -90,7 +90,7 @@ func TestRunAppDelete(t *testing.T) {
 		saveDefaultToken(t)
 		MetaServerURL = srv.URL
 
-		if err := runAppDelete("myapp", appRoleProduction, true); err == nil {
+		if err := runAppDelete("myapp", api.EnvProduction, true); err == nil {
 			t.Fatal("expected error on API failure")
 		}
 	})
@@ -101,70 +101,61 @@ func TestRunAppDelete(t *testing.T) {
 		MetaServerURL = "http://unused"
 		setProfile(t, "nonexistent")
 
-		if err := runAppDelete("myapp", appRoleProduction, true); err == nil {
+		if err := runAppDelete("myapp", api.EnvProduction, true); err == nil {
 			t.Fatal("expected error for unknown profile")
 		}
 	})
 }
 
-// newMockPairMeta 按 X-Make-Target 分流：GetResource 回给定 appRole/pairAppKey 的 app，DeleteResource 按序追加 key 到 *deleted
-func newMockPairMeta(t *testing.T, role, pair string, deleted *[]string) *httptest.Server {
+// newMockDeleteMeta 只认 DeleteResource：按序把 "<key>?appRole=<role>" 追加到 *deleted；
+// 任何其他 target（尤其 GetResource）直接判失败——删除路径不得反查 app
+func newMockDeleteMeta(t *testing.T, deleted *[]string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		switch r.Header.Get("X-Make-Target") {
-		case "MakeService.GetResource":
-			_ = json.NewEncoder(w).Encode(map[string]any{"code": 200, "msg": "ok", "data": map[string]any{
-				"key": "myapp", "name": "myapp", "type": "Make.App",
-				"meta": map[string]any{"appRole": role, "pairAppKey": pair},
-			}})
-		case "MakeService.DeleteResource":
-			var body struct {
-				Key string `json:"key"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			*deleted = append(*deleted, body.Key)
-			_ = json.NewEncoder(w).Encode(map[string]any{"code": 200, "msg": "ok", "data": map[string]any{}})
+		if target := r.Header.Get("X-Make-Target"); target != "MakeService.DeleteResource" {
+			t.Errorf("unexpected X-Make-Target %q: delete must not look up the app", target)
+			w.WriteHeader(http.StatusBadRequest)
+			return
 		}
+		var body struct {
+			Key string `json:"key"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		*deleted = append(*deleted, body.Key+"?appRole="+r.URL.Query().Get("appRole"))
+		_ = json.NewEncoder(w).Encode(map[string]any{"code": 200, "msg": "ok", "data": true})
 	}))
 }
 
-func TestResolveDeleteSteps(t *testing.T) {
+func TestResolveDeleteEnvs(t *testing.T) {
 	tests := []struct {
-		name, env, role, pair string
-		want                  []deleteStep
-		wantErr               bool
+		name, env string
+		want      []string
+		wantErr   bool
 	}{
-		{"production 删本体，不反查", appRoleProduction, "", "", []deleteStep{{"myapp", appRoleProduction}}, false},
-		{"beta 取服务端 pairAppKey", appRoleBeta, "prod", "myapp_beta_", []deleteStep{{"myapp_beta_", appRoleBeta}}, false},
-		{"beta 但传入的是 beta app 拒绝，不反删 prod", appRoleBeta, "beta", "myapp", nil, true},
-		{"beta 无配对拒绝", appRoleBeta, "prod", "", nil, true},
-		{"all 先 beta 后 production", envAll, "prod", "myapp_beta_", []deleteStep{{"myapp_beta_", appRoleBeta}, {"myapp", appRoleProduction}}, false},
-		{"all 无配对只剩 production", envAll, "prod", "", []deleteStep{{"myapp", appRoleProduction}}, false},
-		{"all 传入 beta app 拒绝", envAll, "beta", "myapp", nil, true},
-		{"空 env 拒绝", "", "", "", nil, true},
-		{"未知 env 拒绝", "preview", "", "", nil, true},
+		{"production 只删 prod", api.EnvProduction, []string{api.EnvProduction}, false},
+		{"beta 只删 beta", api.EnvBeta, []string{api.EnvBeta}, false},
+		{"all 先 beta 后 production", envAll, []string{api.EnvBeta, api.EnvProduction}, false},
+		{"空 env 拒绝", "", nil, true},
+		{"未知 env 拒绝", "preview", nil, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var unused []string
-			srv := newMockPairMeta(t, tt.role, tt.pair, &unused)
-			defer srv.Close()
-			got, err := resolveDeleteSteps(api.New(srv.URL, "t"), "myapp", tt.env)
+			got, err := resolveDeleteEnvs(tt.env)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
 			}
 			if !slices.Equal(got, tt.want) {
-				t.Errorf("steps = %v, want %v", got, tt.want)
+				t.Errorf("envs = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
 func TestRunAppDeleteAll(t *testing.T) {
-	// --env ALL（大小写不敏感）按 beta → production 顺序删两次，确认只问一次
+	// --env ALL（大小写不敏感）按 beta → prod 顺序删两次，key 始终是 prod key，确认只问一次
 	var deleted []string
-	srv := newMockPairMeta(t, "prod", "myapp_beta_", &deleted)
+	srv := newMockDeleteMeta(t, &deleted)
 	defer srv.Close()
 	t.Setenv("HOME", t.TempDir())
 	saveDefaultToken(t)
@@ -178,15 +169,16 @@ func TestRunAppDeleteAll(t *testing.T) {
 	if err := runAppDelete("myapp", "ALL", false); err != nil {
 		t.Fatalf("runAppDelete: %v", err)
 	}
-	if !slices.Equal(deleted, []string{"myapp_beta_", "myapp"}) || confirms != 1 {
-		t.Errorf("deleted %v (want [myapp_beta_ myapp]), confirms %d (want 1)", deleted, confirms)
+	want := []string{"myapp?appRole=beta", "myapp?appRole=prod"}
+	if !slices.Equal(deleted, want) || confirms != 1 {
+		t.Errorf("deleted %v (want %v), confirms %d (want 1)", deleted, want, confirms)
 	}
 }
 
 func TestRunAppDeleteBetaTarget(t *testing.T) {
-	// --env beta 时 API 删除的是服务端给的 pairAppKey，而确认表单只见用户给的 app key（配对 key 不外露）
+	// --env beta：body 仍是用户给的 prod key，靠 ?appRole=beta 让服务端定位配对 app；确认表单也只见 prod key
 	var deleted []string
-	srv := newMockPairMeta(t, "prod", "myapp_beta_", &deleted)
+	srv := newMockDeleteMeta(t, &deleted)
 	defer srv.Close()
 	t.Setenv("HOME", t.TempDir())
 	saveDefaultToken(t)
@@ -197,11 +189,11 @@ func TestRunAppDeleteBetaTarget(t *testing.T) {
 	confirmDeleteFunc = func(k, _ string) error { confirmed = k; return nil }
 	t.Cleanup(func() { confirmDeleteFunc = orig })
 
-	if err := runAppDelete("myapp", appRoleBeta, false); err != nil {
+	if err := runAppDelete("myapp", api.EnvBeta, false); err != nil {
 		t.Fatalf("runAppDelete: %v", err)
 	}
-	if confirmed != "myapp" || !slices.Equal(deleted, []string{"myapp_beta_"}) {
-		t.Errorf("confirmed %q (want myapp), deleted %v (want [myapp_beta_])", confirmed, deleted)
+	if confirmed != "myapp" || !slices.Equal(deleted, []string{"myapp?appRole=beta"}) {
+		t.Errorf("confirmed %q (want myapp), deleted %v (want [myapp?appRole=beta])", confirmed, deleted)
 	}
 }
 
@@ -216,7 +208,7 @@ func TestRunAppDeleteFromFile(t *testing.T) {
 		f := filepath.Join(t.TempDir(), "app.yaml")
 		writeTestFile(t, f, []byte("key: fileapp\nname: 文件应用\ntype: Make.App\n"))
 
-		if err := runAppDeleteFromFile(f, appRoleProduction, true); err != nil {
+		if err := runAppDeleteFromFile(f, api.EnvProduction, true); err != nil {
 			t.Fatalf("runAppDeleteFromFile: %v", err)
 		}
 	})
@@ -225,7 +217,7 @@ func TestRunAppDeleteFromFile(t *testing.T) {
 		f := filepath.Join(t.TempDir(), "app.txt")
 		writeTestFile(t, f, []byte("name: foo"))
 
-		if err := runAppDeleteFromFile(f, appRoleProduction, true); err == nil {
+		if err := runAppDeleteFromFile(f, api.EnvProduction, true); err == nil {
 			t.Fatal("expected error for non-yaml file")
 		}
 	})
@@ -234,7 +226,7 @@ func TestRunAppDeleteFromFile(t *testing.T) {
 		f := filepath.Join(t.TempDir(), "entity.yaml")
 		writeTestFile(t, f, []byte("key: foo\nname: 实体\ntype: Make.Entity\nappKey: bar\n"))
 
-		if err := runAppDeleteFromFile(f, appRoleProduction, true); err == nil {
+		if err := runAppDeleteFromFile(f, api.EnvProduction, true); err == nil {
 			t.Fatal("expected error for missing Make.App")
 		}
 	})
