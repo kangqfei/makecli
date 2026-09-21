@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 internal/api 包内的 Client（包内白盒），encoding/json、errors、net/http、net/http/httptest、testing
- * [OUTPUT]: 覆盖 Client.CreateApp / ListApps / DeleteApp（含成功 data 为标量 true 的写路径、?appRole= 断言）/ RoleForEnv（与 HostedEnv 互逆）/ WithHeaders / WithDebug / WithDryRun（X-Dry-Run 注入/缺席）/ GetApp / GetEntity / GetRelation（含 ErrNotFound 语义）/ ErrAuthFailed 鉴权语义 / Traceparent+X-Log-Id 出站头 的单元测试
+ * [OUTPUT]: 覆盖 Client.CreateApp / ListApps / DeleteApp（含成功 data 为标量 true 的写路径）/ WithAppRole（?appRole= 注入 / 续接 / 缺席）/ RoleForEnv（与 HostedEnv 互逆）/ WithHeaders / WithDebug / WithDryRun（X-Dry-Run 注入/缺席）/ GetApp / GetEntity / GetRelation（含 ErrNotFound 语义）/ ErrAuthFailed 鉴权语义 / Traceparent+X-Log-Id 出站头 的单元测试
  * [POS]: internal/api client.go 的配套测试，用 httptest 隔离网络
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -64,9 +65,6 @@ func TestDeleteApp(t *testing.T) {
 			if r.Header.Get("X-Make-Target") != "MakeService.DeleteResource" {
 				t.Errorf("unexpected X-Make-Target: %s", r.Header.Get("X-Make-Target"))
 			}
-			if got := r.URL.Query().Get("appRole"); got != RoleBeta {
-				t.Errorf("appRole query = %q, want %q", got, RoleBeta)
-			}
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			if body["key"] != "myapp" || body["type"] != "Make.App" {
@@ -76,7 +74,7 @@ func TestDeleteApp(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		if err := New(srv.URL, "test-token").DeleteApp("myapp", RoleBeta); err != nil {
+		if err := New(srv.URL, "test-token").DeleteApp("myapp"); err != nil {
 			t.Fatalf("DeleteApp: %v", err)
 		}
 	})
@@ -89,7 +87,7 @@ func TestDeleteApp(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		if err := New(srv.URL, "test-token").DeleteApp("myapp", RoleProd); err != nil {
+		if err := New(srv.URL, "test-token").DeleteApp("myapp"); err != nil {
 			t.Fatalf("DeleteApp: %v", err)
 		}
 	})
@@ -100,7 +98,7 @@ func TestDeleteApp(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		if err := New(srv.URL, "test-token").DeleteApp("myapp", RoleProd); err == nil {
+		if err := New(srv.URL, "test-token").DeleteApp("myapp"); err == nil {
 			t.Fatal("expected error on API failure")
 		}
 	})
@@ -448,6 +446,31 @@ func TestGetRelationNotFoundSemantics(t *testing.T) {
 			t.Fatalf("expected key project_has_tasks, got %q", rel.Key)
 		}
 	})
+}
+
+// WithAppRole 是横切 query：设了就每个请求都带，path 已有 query 时用 & 续接，没设则一字不加
+func TestWithAppRole(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.RequestURI())
+		_ = json.NewEncoder(w).Encode(map[string]any{"code": 200, "msg": "ok", "data": true})
+	}))
+	defer srv.Close()
+
+	beta := New(srv.URL, "t", WithAppRole(RoleBeta))
+	if err := beta.DeleteApp("myapp"); err != nil {
+		t.Fatalf("DeleteApp: %v", err)
+	}
+	if err := beta.post("x", "/code/v1/repository?version=1", nil); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if err := New(srv.URL, "t").DeleteApp("myapp"); err != nil {
+		t.Fatalf("DeleteApp: %v", err)
+	}
+	want := []string{"/meta/v1/app?appRole=beta", "/code/v1/repository?version=1&appRole=beta", "/meta/v1/app"}
+	if !slices.Equal(seen, want) {
+		t.Errorf("request URIs = %v, want %v", seen, want)
+	}
 }
 
 // RoleForEnv 与 HostedEnv 互为逆映射：任一角色的 app，承载环境再映射回来仍是该角色

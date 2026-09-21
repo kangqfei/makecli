@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 bytes、encoding/json、errors、fmt、io、net/http、strings、time，依赖 debug.go 的 debugSink，依赖 internal/trace 的 TraceID/Traceparent
- * [OUTPUT]: 对外提供 Client 类型、ErrNotFound / ErrAuthFailed 哨兵错误、UniqueConstraintError 类型化错误（409 唯一性冲突，errors.As 判定）、Option / WithDebug(on, DebugFormat) / WithHeaders / WithDryRun 功能选项、New 构造函数、App（Role / PairAppKey / HostedEnv / KeyForEnv：prod/beta 配对知识收口，环境 → 承载 app key）、RoleForEnv（HostedEnv 逆映射：环境 → app 角色）、RoleProd / RoleBeta 常量 / Field / Entity / EntityProperties / UniqueConstraint / RelationEnd / RelationProperties / Relation / Schema 类型、CreateApp(key, name, properties) / ListApps(page, size, filter) / DeleteApp(key, role)（?appRole= 由服务端定位配对 app，不反查）/ GetApp(key) / CreateEntity(key, name, appKey, props) / ListEntities(appKey, page, size, filter) / GetEntity(appKey, key) / UpdateEntity(key, name, appKey, props) / DeleteEntity / CreateRelation(key, name, appKey, props) / UpdateRelation / ListRelations(appKey, ...) / GetRelation(appKey, key) / DeleteRelation / GetSchema(appKey) 方法。资源以 Key 为唯一标识符（英数下划线），Name 为用户可见展示名（支持中文）。Get* 方法在资源确实不存在时返回 ErrNotFound（可用 errors.Is 判定），其余错误（传输/非 not-found 业务码/解码）原样返回
+ * [OUTPUT]: 对外提供 Client 类型、ErrNotFound / ErrAuthFailed 哨兵错误、UniqueConstraintError 类型化错误（409 唯一性冲突，errors.As 判定）、Option / WithDebug(on, DebugFormat) / WithHeaders / WithDryRun / WithAppRole 功能选项、New 构造函数、App（Role / PairAppKey / HostedEnv / KeyForEnv：prod/beta 配对知识收口，环境 → 承载 app key）、RoleForEnv（HostedEnv 逆映射：环境 → app 角色）、RoleProd / RoleBeta 常量 / Field / Entity / EntityProperties / UniqueConstraint / RelationEnd / RelationProperties / Relation / Schema 类型、CreateApp(key, name, properties) / ListApps(page, size, filter) / DeleteApp(key) / GetApp(key) / CreateEntity(key, name, appKey, props) / ListEntities(appKey, page, size, filter) / GetEntity(appKey, key) / UpdateEntity(key, name, appKey, props) / DeleteEntity / CreateRelation(key, name, appKey, props) / UpdateRelation / ListRelations(appKey, ...) / GetRelation(appKey, key) / DeleteRelation / GetSchema(appKey) 方法。资源以 Key 为唯一标识符（英数下划线），Name 为用户可见展示名（支持中文）。Get* 方法在资源确实不存在时返回 ErrNotFound（可用 errors.Is 判定），其余错误（传输/非 not-found 业务码/解码）原样返回
  * [POS]: internal/api 的核心，封装 Make Meta Service 的 HTTP 调用
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -100,6 +100,7 @@ type Client struct {
 	debug      *debugSink // nil 即关闭
 	dryRun     bool
 	headers    map[string]string
+	appRole    string // 非空即每请求带 ?appRole=，选中 App 对里的哪一半（prod / beta）
 }
 
 // Option 是 Client 的功能选项
@@ -125,6 +126,13 @@ func WithHeaders(h map[string]string) Option {
 // 调用方仍按 code 判定成功/失败——CLI 自知发的是 dry-run，无需从响应里区分。
 func WithDryRun(on bool) Option {
 	return func(c *Client) { c.dryRun = on }
+}
+
+// WithAppRole 选定 App 对中操作哪一半：每个请求带上横切 query ?appRole=prod|beta（MetaAPIDesign.md），
+// body 里的 app key 始终是 prod key，服务端按角色定位实际资源（beta 即配对 app），CLI 不反查 pairAppKey。
+// 空串即不带，交服务端缺省。
+func WithAppRole(role string) Option {
+	return func(c *Client) { c.appRole = role }
 }
 
 // New 创建新的 API 客户端，30s 超时
@@ -248,15 +256,15 @@ func (c *Client) ListApps(page, size int, filter string) ([]App, int, error) {
 	return result.Data, result.Pagination.Total, nil
 }
 
-// DeleteApp 调用 MakeService.DeleteResource 删除 App 对中指定角色的一半：
-// key 始终是 prod app key，?appRole=prod|beta 由服务端定位实际删除的 app（beta 即配对 app），
-// CLI 不再反查 meta.pairAppKey。prod 有 beta 配对时服务端 409 拒删须先删 beta。
-func (c *Client) DeleteApp(key, role string) error {
+// DeleteApp 调用 MakeService.DeleteResource 删除 App 对中的一半：key 始终是 prod app key，
+// 删哪一半由 WithAppRole 决定（服务端按 ?appRole= 定位，beta 即配对 app）。
+// prod 有 beta 配对时服务端 409 拒删须先删 beta。
+func (c *Client) DeleteApp(key string) error {
 	body := map[string]any{
 		"key":  key,
 		"type": "Make.App",
 	}
-	return c.post("MakeService.DeleteResource", "/meta/v1/app?appRole="+url.QueryEscape(role), body)
+	return c.post("MakeService.DeleteResource", "/meta/v1/app", body)
 }
 
 // ---------------------------------- Entity 操作 ----------------------------------
@@ -564,6 +572,18 @@ func (c *Client) do(target, path string, body, result any) error {
 	return c.request(http.MethodPost, target, path, body, result)
 }
 
+// requestURL 拼出站 URL：baseURL + path，再按 WithAppRole 追加横切 query（path 已带 query 时用 & 续接）
+func (c *Client) requestURL(path string) string {
+	if c.appRole == "" {
+		return c.baseURL + path
+	}
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return c.baseURL + path + sep + "appRole=" + url.QueryEscape(c.appRole)
+}
+
 // request 执行任意 HTTP 方法的请求并将响应体解码到 result。
 // body 为 nil 时不携带请求体与 Content-Type（GET 类只读调用），非 nil 时 JSON 序列化。
 func (c *Client) request(method, target, path string, body, result any) error {
@@ -601,7 +621,8 @@ func (c *Client) request(method, target, path string, body, result any) error {
 	if body != nil {
 		payload = bytes.NewReader(data)
 	}
-	req, err := http.NewRequest(method, c.baseURL+path, payload)
+	fullURL := c.requestURL(path)
+	req, err := http.NewRequest(method, fullURL, payload)
 	if err != nil {
 		return err
 	}
@@ -609,7 +630,7 @@ func (c *Client) request(method, target, path string, body, result any) error {
 		req.Header.Set(h[0], h[1])
 	}
 	if c.debug != nil {
-		c.debug.request(debugRequest{Method: method, URL: c.baseURL + path, Headers: headers, Body: data})
+		c.debug.request(debugRequest{Method: method, URL: fullURL, Headers: headers, Body: data})
 	}
 
 	resp, err := c.httpClient.Do(req)

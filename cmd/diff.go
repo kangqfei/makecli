@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 依赖 cmd/client（newClientFromProfile）、internal/api（Client/GetApp/ListEntities/ListRelations/Entity/Relation/UniqueConstraint/RelationProperties/RelationEnd）、cmd/apply（loadManifestsFromFile/Dir/ResourceManifest/getFieldMap/extractUniqueConstraints）、cmd/output（resolveOutputFormat/writeJSON）、encoding/json、errors、fmt、os、reflect、slices、sort、strings
+ * [INPUT]: 依赖 cmd/client（newClientFromProfile）、internal/api（Client/WithAppRole/RoleBeta/GetApp/ListEntities/ListRelations/Entity/Relation/UniqueConstraint/RelationProperties/RelationEnd）、cmd/apply（loadManifestsFromFile/Dir/ResourceManifest/getFieldMap/extractUniqueConstraints）、cmd/output（resolveOutputFormat/writeJSON）、encoding/json、errors、fmt、os、reflect、slices、sort、strings
  * [OUTPUT]: 对外提供 newDiffCmd 函数、errDiffFound 哨兵错误
- * [POS]: cmd 模块的顶层 diff 命令，对比远端 Meta Server 上的 App DSL（Entity + Relation + 唯一性约束）与本地 YAML 文件的差异；Entity 按 Key 匹配，Field 按 Key、唯一性约束按 name（字段顺序敏感）匹配；有差异时返回 errDiffFound（由 Execute 转译为退出码 1），实现 CI 漂移门禁；目录扫描与 apply 同款 --max-depth（默认 2，0=不限），确保 diff/apply 对「哪些文件构成 app」判定一致
+ * [POS]: cmd 模块的顶层 diff 命令，对比远端 Meta Server 上 App 的 beta 环境 DSL（Entity + Relation + 唯一性约束）与本地 YAML 文件的差异——本地代码经 deploy 只推 beta，故基线固定是 beta（client 带 WithAppRole(RoleBeta)，无 --env 旋钮）；Entity 按 Key 匹配，Field 按 Key、唯一性约束按 name（字段顺序敏感）匹配；有差异时返回 errDiffFound（由 Execute 转译为退出码 1），实现 CI 漂移门禁；目录扫描与 apply 同款 --max-depth（默认 2，0=不限），确保 diff/apply 对「哪些文件构成 app」判定一致
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -37,9 +37,10 @@ func newDiffCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "diff -f <path>",
-		Short: "Compare local DSL files with remote App definition",
-		Long: `Compare local YAML resource definitions with the remote App on Meta Server.
-The app name is inferred from the Make.App manifest or entity's app field in the YAML files.`,
+		Short: "Compare local DSL files with the app's beta environment",
+		Long: `Compare local YAML resource definitions with the app's beta environment on Meta Server.
+Local code is deployed to beta (production is only reached via app promote), so beta is the
+baseline. The app key is inferred from the Make.App manifest or entity's appKey field.`,
 		Example: `  makecli diff -f ./dsl/
   makecli diff --file app.yaml --output json`,
 		Args:         cobra.NoArgs,
@@ -124,7 +125,8 @@ func runDiff(path, output string, maxDepth int) error {
 	}
 
 	// 构建客户端
-	client, err := newClientFromProfile()
+	// 基线固定是 beta：本地代码经 deploy 只到 beta，production 由 promote 发布
+	client, err := newClientFromProfile(api.WithAppRole(api.RoleBeta))
 	if err != nil {
 		return err
 	}

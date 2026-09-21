@@ -1,8 +1,8 @@
 /**
- * [INPUT]: 依赖 cmd/client（newClientFromProfile）、cmd/app（loadAppManifestFromFile）、internal/api（EnvBeta/EnvProduction、RoleForEnv、DeleteApp）、errors、fmt、os、strings、charm.land/huh/v2（交互确认表单）、github.com/mattn/go-isatty（TTY 检测）、github.com/spf13/cobra
+ * [INPUT]: 依赖 cmd/client（newClientFromProfile）、cmd/app（loadAppManifestFromFile）、internal/api（EnvBeta/EnvProduction、RoleForEnv、WithAppRole、DeleteApp）、errors、fmt、os、strings、charm.land/huh/v2（交互确认表单）、github.com/mattn/go-isatty（TTY 检测）、github.com/spf13/cobra
  * [OUTPUT]: 对外提供 newAppDeleteCmd 函数；包内 resolveDeleteEnvs（--env → 有序环境序列）、envAll 常量；包级 confirmDeleteFunc 可打桩变量（测试替换，参照 deploy.go gitPushFunc 模式）
  * [POS]: cmd/app 的 delete 子命令。每个 App 是 prod/beta 一对（MetaAPIDesign.md：meta.appRole 标角色，prod 有 beta 配对时服务端 409 拒删）。
- *        --env 必填（大小写不敏感）：production / beta 各删一半，all 先 beta 后 production；每一步都是「prod key + ?appRole=」交服务端定位目标，
+ *        --env 必填（大小写不敏感）：production / beta 各删一半，all 先 beta 后 production；每一步用 WithAppRole(RoleForEnv(env)) 的 client 发「prod key + ?appRole=」交服务端定位目标，
  *        CLI 不反查 pairAppKey、不触 GetApp——配对关系是服务端知识，删除路径零读请求。
  *        用户面只见「app key + 环境」：确认表单敲的是用户给的 app key（标题注明环境），成功提示逐环境一行，--yes 跳过；支持 -f 文件模式
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -93,17 +93,18 @@ func runAppDelete(key, env string, skipConfirm bool) error {
 	if err != nil {
 		return err
 	}
-	client, err := newClientFromProfile()
-	if err != nil {
-		return err
-	}
 	if !skipConfirm {
 		if err := confirmDeleteFunc(key, env); err != nil {
 			return err
 		}
 	}
+	// 每个环境一个 client：appRole 是 client 级横切 query，删哪一半由它选定
 	for _, e := range envs {
-		if err := client.DeleteApp(key, api.RoleForEnv(e)); err != nil {
+		client, err := newClientFromProfile(api.WithAppRole(api.RoleForEnv(e)))
+		if err != nil {
+			return err
+		}
+		if err := client.DeleteApp(key); err != nil {
 			return fmt.Errorf("delete %s environment: %w", e, err)
 		}
 		fmt.Printf("App '%s' %s environment deleted successfully\n", key, e)

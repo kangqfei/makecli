@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 cmd 包内函数（包内白盒）、internal/config、internal/api、encoding/json、errors、io、net/http、net/http/httptest、os、path/filepath、strings、testing
- * [OUTPUT]: 覆盖 diff 子命令核心逻辑的单元测试（Entity + Relation + 唯一性约束 + 退出码契约：有差异返回 errDiffFound）
+ * [OUTPUT]: 覆盖 diff 子命令核心逻辑的单元测试（Entity + Relation + 唯一性约束 + 退出码契约：有差异返回 errDiffFound + 远端请求一律带 ?appRole=beta）
  * [POS]: cmd 模块顶层 diff 命令的配套测试，用 httptest 隔离网络、临时文件测试差异对比；自包含 stdout 劫持验证 JSON/表格两种输出模式的退出语义
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -810,6 +810,10 @@ func newDiffServer(t *testing.T, remoteEntities []api.Entity, remoteRelations []
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		target := r.Header.Get("X-Make-Target")
 		w.Header().Set("Content-Type", "application/json")
+		// diff 的基线固定是 beta：每个远端请求都必须带 ?appRole=beta
+		if got := r.URL.Query().Get("appRole"); got != api.RoleBeta {
+			t.Errorf("%s %s: appRole query = %q, want %q", target, r.URL.Path, got, api.RoleBeta)
+		}
 
 		switch target {
 		case "MakeService.GetResource":
