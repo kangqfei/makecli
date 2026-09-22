@@ -4,7 +4,7 @@
  * [POS]: internal/config 的 config 文件管理，读写 config 文件（默认 ~/.make/config，INI 格式）；
  *        [settings] 的三种写法（SetSetting 单键、UnsetSetting 删键、MigrateSettings 旧键搬家）都经 updateSettings 一条路；
  *        所有落盘键值先过 validateINIKey/validateINIValue（拒换行与首尾空白，防止值注入伪造 section/键）
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
 package config
@@ -49,8 +49,9 @@ func validateINIValue(field, value string) error {
 
 // ---------------------------------- 数据结构 ----------------------------------
 
-// ConfigProfile 代表一个命名配置块，如 [default]，持有租户与操作者信息
+// ConfigProfile 代表一个命名配置块，如 [default]，持有默认 context、服务器地址、租户与操作者信息
 type ConfigProfile struct {
+	Context       string
 	MetaServerURL string
 	RepoServerURL string
 	AuthServerURL string
@@ -138,6 +139,7 @@ func parseConfigINI(f *os.File) (Config, error) {
 			continue
 		}
 		cfg[name] = ConfigProfile{
+			Context:       kv["context"],
 			MetaServerURL: kv["meta-server-url"],
 			RepoServerURL: kv["repo-server-url"],
 			AuthServerURL: kv["auth-server-url"],
@@ -235,6 +237,7 @@ func saveConfigWithSettings(cfg Config, settings map[string]string) error {
 			return err
 		}
 		for field, value := range map[string]string{
+			"context":         p.Context,
 			"meta-server-url": p.MetaServerURL,
 			"repo-server-url": p.RepoServerURL,
 			"auth-server-url": p.AuthServerURL,
@@ -283,6 +286,9 @@ func saveConfigWithSettings(cfg Config, settings map[string]string) error {
 			}
 			_, _ = fmt.Fprintf(w, "[%s]\n", name)
 			p := cfg[name]
+			if p.Context != "" {
+				_, _ = fmt.Fprintf(w, "context = %s\n", p.Context)
+			}
 			if p.MetaServerURL != "" {
 				_, _ = fmt.Fprintf(w, "meta-server-url = %s\n", p.MetaServerURL)
 			}

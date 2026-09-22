@@ -2,7 +2,7 @@
  * [INPUT]: 依赖 context.go 的 runContextList / runContextUse / runContextShow 与 newContextCmd；setContextFlag / captureStdout / stubStdoutTerminal 测试辅助；internal/config 隔离配置
  * [OUTPUT]: 覆盖 context 命令组的单元测试（list 表格标当前 / JSON 全字段 / use 持久化与拒绝未知名 / show 遵循解析链 / 旧键配置指引 doctor / 子命令与别名注册）
  * [POS]: cmd 模块 context.go 的配套测试
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
 package cmd
@@ -103,7 +103,7 @@ func TestContextUse(t *testing.T) {
 				t.Errorf("runContextUse: %v", err)
 			}
 		})
-		if !strings.Contains(out, `Switched to context "dev".`) {
+		if !strings.Contains(out, `Global default context set to "dev".`) {
 			t.Errorf("unexpected confirmation: %q", out)
 		}
 		s, err := config.LoadSettings()

@@ -3,7 +3,7 @@
  * [OUTPUT]: 对外提供 newContextCmd 函数（含 list/use/show 子命令）；包内 runContextList / runContextUse / runContextShow 白盒入口
  * [POS]: cmd 模块的 context 命令组——后端 context（dev/test/production）的用户面，对标 docker context：list 列内置 preset 并标当前、use 持久化到 [settings] context、show 回显解析结果；
  *        context 是内置 preset 故无 create/rm，自定义地址仍走 profile 的 URL 覆盖键；解析链与写路径分别复用 client.go resolveContext 与 settings.go setSetting，不另起炉灶
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
 package cmd
@@ -22,7 +22,7 @@ func newContextCmd() *cobra.Command {
 		Use:   "context",
 		Short: "Manage the backend context (which Make backend to talk to)",
 		Long: `A context selects which Make backend every command talks to: dev, test or production.
-It is resolved as --context > $` + EnvContext + ` > [settings] context > ` + config.DefaultContext + `.
+It is resolved as --context > $` + EnvContext + ` > profile.context > [settings] context > ` + config.DefaultContext + `.
 
 Not to be confused with an app's deployment environment (beta / production):
 "app deploy" always targets beta, "app promote" publishes beta to production,
@@ -116,7 +116,7 @@ func runContextList(output string) error {
 func newContextUseCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "use <name>",
-		Short:        "Set the current context (same as: makecli settings set context <name>)",
+		Short:        "Set the global default context (same as: makecli settings set context <name>)",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -129,7 +129,7 @@ func runContextUse(name string) error {
 	if err := setSetting("context", name); err != nil {
 		return err
 	}
-	fmt.Printf("Switched to context %q.\n", name)
+	fmt.Printf("Global default context set to %q.\n", name)
 	return nil
 }
 

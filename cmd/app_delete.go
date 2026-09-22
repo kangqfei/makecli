@@ -104,8 +104,9 @@ func runAppDelete(key, env string, skipConfirm bool) error {
 		if err != nil {
 			return err
 		}
+		// 错误原样上抛：409 业务拒绝（如 prod 仍有 beta 配对）的服务端 msg 已是完整说明，不再套环境前缀
 		if err := client.DeleteApp(key); err != nil {
-			return fmt.Errorf("delete %s environment: %w", e, err)
+			return err
 		}
 		fmt.Printf("App '%s' %s environment deleted successfully\n", key, e)
 	}

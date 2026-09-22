@@ -95,6 +95,20 @@ func TestRunAppDelete(t *testing.T) {
 		}
 	})
 
+	t.Run("409 refusal surfaces the server message verbatim", func(t *testing.T) {
+		// prod 仍有 beta 配对时服务端 409 拒删：给用户的就是服务端那句话，不套「唯一性」或环境前缀
+		msg := "当前应用存在 Beta 环境，请先删除 Beta 环境，再删除正式环境。"
+		srv := newMockMeta(t, 409, msg)
+		defer srv.Close()
+		t.Setenv("HOME", t.TempDir())
+		saveDefaultToken(t)
+		MetaServerURL = srv.URL
+
+		if err := runAppDelete("myapp", api.EnvProduction, true); err == nil || err.Error() != msg {
+			t.Fatalf("err = %v, want exactly %q", err, msg)
+		}
+	})
+
 	t.Run("fails with unknown profile", func(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
 		saveDefaultToken(t)

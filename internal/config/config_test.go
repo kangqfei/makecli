@@ -1,8 +1,8 @@
 /**
  * [INPUT]: 依赖 config 包内的 parseConfigINI、LoadConfig、SaveConfig、SetSetting、ConfigPath（包内白盒）
- * [OUTPUT]: 覆盖 INI 解析与 config 读写全路径的单元测试（含 INI 注入拒绝）
+ * [OUTPUT]: 覆盖 INI 解析与 config 读写全路径的单元测试（含 profile context 保留与 INI 注入拒绝）
  * [POS]: internal/config 模块 config.go 的配套测试
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
 package config
@@ -46,7 +46,7 @@ func TestSaveConfigAndLoad(t *testing.T) {
 
 	original := Config{
 		"default": {RepoServerURL: "https://repo.example/api/make", AuthServerURL: "https://auth.example", XTenantID: "tenant-1", OperatorID: "op-1"},
-		"staging": {XTenantID: "tenant-2", OperatorID: ""},
+		"staging": {Context: "test", XTenantID: "tenant-2", OperatorID: ""},
 	}
 
 	if err := SaveConfig(original); err != nil {
@@ -68,6 +68,9 @@ func TestSaveConfigAndLoad(t *testing.T) {
 	}
 	for profile, want := range original {
 		got := loaded[profile]
+		if got.Context != want.Context {
+			t.Errorf("profile %q: Context = %q, want %q", profile, got.Context, want.Context)
+		}
 		if got.RepoServerURL != want.RepoServerURL {
 			t.Errorf("profile %q: RepoServerURL = %q, want %q", profile, got.RepoServerURL, want.RepoServerURL)
 		}

@@ -2,10 +2,10 @@
  * [INPUT]: 依赖 client.go 的 Client.do / checkGetResult / notFoundCode / ErrNotFound / metaVersion，encoding/json、fmt
  * [OUTPUT]: 对外提供 PromoteRun / PromoteStep / PromoteStatus（含 Finished / Succeeded 终态判定）类型、
  *           PromoteStateSucceeded / Failed / Canceled / Terminated / TimedOut 状态常量、
- *           Client.PromoteApp(betaKey) / Client.GetPromoteStatus(betaKey, workflowID, runID) 方法
+ *           Client.PromoteApp(betaKey) / Client.GetPromoteStatus(betaKey, promoteID) 方法
  * [POS]: internal/api 的应用环境发布（make-console app-environment）调用层：POST /console/v1/app-environment/product，
  *        X-Make-Target 区分动作——CreateResource 发起 beta → production 发布（服务端 Temporal 异步流程，
- *        固定 beta 最近一次成功部署的版本，回执 workflowId + runId），StatusResource 按 workflowId + runId 精确查本次进度。
+ *        固定 beta 最近一次成功部署的版本，回执 promoteId），StatusResource 按 promoteId 精确查本次进度。
  *        与 client.go 的 Meta 操作共用 Client 与 do 原语（网关前缀 /api/make 由 cmd 层补齐）；被 cmd/promote 消费
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -20,11 +20,10 @@ import (
 // appEnvironmentProductPath 是「发布到 production」资源端点（创建 = 发起发布，状态 = 查进度）
 const appEnvironmentProductPath = "/console/v1/app-environment/product"
 
-// PromoteRun 是发起发布的回执。workflowId 按 beta 固定（preview-publish:{orgId}:{betaAppId}），
-// runId 每次发布新生成——查进度必须两者同传，才能精确定位本次发布而非该 beta 的最近一次。
+// PromoteRun 是发起发布的回执：promoteId 每次发布新生成，是查进度的唯一标识
+// （运行中重复发起会复用当前发布，回执即当前那次的 promoteId）。
 type PromoteRun struct {
-	WorkflowID string `json:"workflowId"`
-	RunID      string `json:"runId"`
+	PromoteID string `json:"promoteId"`
 }
 
 // PromoteStep 是发布流程中的一个步骤（检查版本 → 发布配置 → 发布代码 → 等待部署）
@@ -38,8 +37,7 @@ type PromoteStep struct {
 // 四个 ID 字段用 json.Number：文档示例是字符串形态（"6098"），数字形态亦可能出现，
 // Number 两者都能解码，CLI 只做展示不参与运算。
 type PromoteStatus struct {
-	WorkflowID         string        `json:"workflowId"`
-	RunID              string        `json:"runId"`
+	PromoteID          string        `json:"promoteId"`
 	Type               string        `json:"type"`
 	State              string        `json:"state"`
 	Step               string        `json:"step"`
@@ -88,7 +86,7 @@ func appEnvironmentBody(betaKey string, properties map[string]any) map[string]an
 
 // PromoteApp 调用 MakeService.CreateResource 发起 beta → production 发布。
 // 服务端校验管理员权限与 beta/prod 绑定、固定 beta 最近一次成功部署的版本后异步执行；
-// 同一 beta 已有发布在跑时复用当前任务（回执即该任务的 workflowId/runId），不会重复发布。
+// 同一 beta 已有发布在跑时复用当前任务（回执即该任务的 promoteId），不会重复发布。
 // 业务码 404 返回 ErrNotFound（beta app 不存在），其余非 200 原样为「API 错误」。
 func (c *Client) PromoteApp(betaKey string) (*PromoteRun, error) {
 	var result struct {
@@ -108,16 +106,16 @@ func (c *Client) PromoteApp(betaKey string) (*PromoteRun, error) {
 		return nil, fmt.Errorf("API 错误 [%d]: %s", result.Code, result.Message)
 	}
 	run := result.Data.Properties
-	if run.WorkflowID == "" || run.RunID == "" {
-		return nil, fmt.Errorf("服务端未返回发布任务标识（workflowId/runId）")
+	if run.PromoteID == "" {
+		return nil, fmt.Errorf("服务端未返回发布任务标识（promoteId）")
 	}
 	return &run, nil
 }
 
-// GetPromoteStatus 调用 MakeService.StatusResource 按 workflowId + runId 查询本次发布进度。
+// GetPromoteStatus 调用 MakeService.StatusResource 按 promoteId 查询本次发布进度。
 // 任务不存在（或响应无 state）返回 ErrNotFound；其余错误原样返回。
-func (c *Client) GetPromoteStatus(betaKey, workflowID, runID string) (*PromoteStatus, error) {
-	body := appEnvironmentBody(betaKey, map[string]any{"workflowId": workflowID, "runId": runID})
+func (c *Client) GetPromoteStatus(betaKey, promoteID string) (*PromoteStatus, error) {
+	body := appEnvironmentBody(betaKey, map[string]any{"promoteId": promoteID})
 	var result struct {
 		Code    int    `json:"code"`
 		Message string `json:"msg"`

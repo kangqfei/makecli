@@ -2,8 +2,8 @@
  * [INPUT]: 依赖 internal/config，bufio、encoding/base64、fmt、os、strings、github.com/spf13/cobra
  * [OUTPUT]: 对外提供 newConfigureCmd 函数（含 token/config/set/get/verify/resolve 子命令）；包内 sampleConfig 模板、validConfigKeys、rejectSettingKey
  * [POS]: cmd 模块的 configure 命令组，交互式或直接写入 ~/.make/credentials 和 ~/.make/config 的 profile 段；
- *        全局 [settings] 键不在此（归 settings 命令组），set/get 收到全局键名时经 rejectSettingKey 报错并指路，不静默转发
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ *        context 同时支持 profile 默认值与全局默认值；set/get 收到仅限全局的键名时经 rejectSettingKey 报错并指路，不静默转发
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
 package cmd
@@ -55,6 +55,8 @@ channel = stable
 # These override the context preset and are optional - replace the
 # placeholders, or delete a line to fall back to the preset for that host.
 [default]
+# Default backend for this profile; --context and MAKE_CLI_CONTEXT override it
+context = dev
 # Meta Server host (the gateway prefix /api/make is added automatically)
 meta-server-url = meta.dev.example.com
 # Code Repository Server host
@@ -226,7 +228,7 @@ func runConfigureConfig() error {
 
 // ---------------------------------- set 子命令 ----------------------------------
 
-var validConfigKeys = []string{"meta-server-url", "repo-server-url", "auth-server-url", "X-Tenant-ID", "X-Operator-ID"}
+var validConfigKeys = []string{"context", "meta-server-url", "repo-server-url", "auth-server-url", "X-Tenant-ID", "X-Operator-ID"}
 
 func validateConfigKey(key string) error {
 	if slices.Contains(validConfigKeys, key) {
@@ -237,7 +239,7 @@ func validateConfigKey(key string) error {
 
 // rejectSettingKey 把误投到 configure 的全局键指路到 settings 命令，不做静默转发（保持一条路）。
 func rejectSettingKey(key, verb string) error {
-	if isSettingKey(key) {
+	if isSettingKey(key) && !slices.Contains(validConfigKeys, key) {
 		return fmt.Errorf("%q is a global setting, not a profile key; use: makecli settings %s %s", key, verb, key)
 	}
 	return nil
@@ -255,6 +257,9 @@ Global settings (%s) are managed by "makecli settings".`,
 			strings.Join(settingKeyNames(), ", ")),
 		Example: `  # point the current profile at a custom meta server host
   makecli configure set meta-server-url meta.dev.example.com
+
+  # set the default backend for a specific profile
+  makecli --profile staging configure set context test
 
   # set the tenant header for a specific profile
   makecli --profile staging configure set X-Tenant-ID 1024`,
@@ -279,6 +284,11 @@ func runConfigureSet(key, value string) error {
 	}
 	p := cfg[Profile]
 	switch key {
+	case "context":
+		if value != "" && !slices.Contains(config.ContextNames(), value) {
+			return fmt.Errorf("unknown context %q, valid: %s", value, strings.Join(config.ContextNames(), ", "))
+		}
+		p.Context = value
 	case "meta-server-url":
 		p.MetaServerURL = value
 	case "repo-server-url":
@@ -329,6 +339,8 @@ func runConfigureGet(key string) error {
 	}
 	p := cfg[Profile]
 	switch key {
+	case "context":
+		fmt.Println(p.Context)
 	case "meta-server-url":
 		fmt.Println(p.MetaServerURL)
 	case "repo-server-url":

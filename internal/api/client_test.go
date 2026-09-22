@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 internal/api 包内的 Client（包内白盒），encoding/json、errors、net/http、net/http/httptest、testing
- * [OUTPUT]: 覆盖 Client.CreateApp / ListApps / DeleteApp（含成功 data 为标量 true 的写路径）/ WithAppRole（?appRole= 注入 / 续接 / 缺席）/ RoleForEnv（与 HostedEnv 互逆）/ WithHeaders / WithDebug / WithDryRun（X-Dry-Run 注入/缺席）/ GetApp / GetEntity / GetRelation（含 ErrNotFound 语义）/ ErrAuthFailed 鉴权语义 / Traceparent+X-Log-Id 出站头 的单元测试
+ * [OUTPUT]: 覆盖 Client.CreateApp / ListApps / DeleteApp（含成功 data 为标量 true 的写路径）/ writeStatusErr（409 按 data 形态分流：带 constraint 才是唯一性冲突，其余原样回 msg）/ WithAppRole（?appRole= 注入 / 续接 / 缺席）/ RoleForEnv（与 HostedEnv 互逆）/ WithHeaders / WithDebug / WithDryRun（X-Dry-Run 注入/缺席）/ GetApp / GetEntity / GetRelation（含 ErrNotFound 语义）/ ErrAuthFailed 鉴权语义 / Traceparent+X-Log-Id 出站头 的单元测试
  * [POS]: internal/api client.go 的配套测试，用 httptest 隔离网络
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -446,6 +446,33 @@ func TestGetRelationNotFoundSemantics(t *testing.T) {
 			t.Fatalf("expected key project_has_tasks, got %q", rel.Key)
 		}
 	})
+}
+
+// 409 只有 data 带 constraint 才是唯一性冲突；其余 409 是业务规则拒绝，服务端 msg 就是给用户的全部信息
+func TestWriteStatusErr(t *testing.T) {
+	msg := "当前应用存在 Beta 环境，请先删除 Beta 环境，再删除正式环境。"
+	tests := []struct {
+		name string
+		code int
+		data string
+		want string
+	}{
+		{"409 带约束 → UniqueConstraintError", 409, `{"constraint":"uniq_email","fields":["email"]}`, "唯一性约束冲突 [uniq_email]：字段 (email) 已存在相同值"},
+		{"409 无 data → msg 原样", 409, ``, msg},
+		{"409 data 为标量 → msg 原样", 409, `true`, msg},
+		{"409 data 为空对象 → msg 原样", 409, `{}`, msg},
+		{"非 409 → 通用前缀", 500, `{}`, "API 错误 [500]: " + msg},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := writeStatusErr(tt.code, msg, json.RawMessage(tt.data)).Error(); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+	if err := writeStatusErr(409, "", nil); err.Error() != "API 错误 [409]: " {
+		t.Errorf("empty msg 409 = %q, want generic fallback", err)
+	}
 }
 
 // WithAppRole 是横切 query：设了就每个请求都带，path 已有 query 时用 & 续接，没设则一字不加

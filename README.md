@@ -120,7 +120,7 @@ token 按以下顺序取值，命中即止：
 
 服务器地址同构：`--meta-server-url` > `MAKE_META_SERVER_URL` > `~/.make/config` 的 `meta-server-url`，都没配则用当前 context 的内置地址；代码仓库服务无 flag 级，`MAKE_REPO_SERVER_URL` > `repo-server-url` > 内置地址。
 
-后端 context（连哪套 Make 后端：dev / test / production）与 profile 正交：`--context` > `MAKE_CLI_CONTEXT` > `~/.make/config` 的 `[settings] context` > `production`。`makecli context list` 列出内置 context 并标当前，`makecli context use <name>` 持久切换，`makecli context show` 回显本次生效值。注意 context 不是 app 的部署环境——后者是 beta / production：`app deploy` 只推 beta，`app promote` 把 beta 发布到 production，`app delete --env` 选删配对的哪一半。旧版 `[settings] environment` 键不再识别：`makecli doctor` 只检查并标出可修项，`makecli doctor --fix` 原地迁移。
+后端 context（连哪套 Make 后端：dev / test / production）支持在 profile 中配置默认值：`--context` > `MAKE_CLI_CONTEXT` > 当前 profile 的 `context` > `~/.make/config` 的 `[settings] context` > `production`。`makecli context list` 列出内置 context 并标当前，`makecli context use <name>` 修改全局默认，`makecli context show` 回显本次生效值。注意 context 不是 app 的部署环境——后者是 beta / production：`app deploy` 只推 beta，`app promote` 把 beta 发布到 production，`app delete --env` 选删配对的哪一半。旧版 `[settings] environment` 键不再识别：`makecli doctor` 只检查并标出可修项，`makecli doctor --fix` 原地迁移。
 
 ```bash
 # CI / 脚本：用环境变量，不落盘、不进 shell history
@@ -213,3 +213,5 @@ make test
 ```
 make local
 ```
+
+为 profile 配置默认后端：`makecli --profile wangLeiTest configure set context test`。读取使用 `configure get context`，清除使用 `configure set context ""`。仅未配置时向下回退，当前优先级的非法值直接报错。

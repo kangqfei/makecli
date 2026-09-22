@@ -4,9 +4,9 @@
  * [POS]: cmd 模块的公共 helper，统一「全局命令行入参 → API 客户端」的构建逻辑——profile / token / server / context / debug 全部由 root PersistentFlag 注入，子命令零参数调用；
  *        newClientFromProfile 收 ...api.Option 变参，把每命令横切选项（如 WithDryRun）追加到基础选项之后，写命令按需注入；
  *        resolveAccessToken 是 token 取值链的唯一入口：--access-token flag > $MAKE_ACCESS_TOKEN > credentials[profile].access_token（resolveProfile / configure verify / whoami 共用，不允许第二条链）；
- *        resolveContext 是后端 context 解析链的唯一入口：--context > $MAKE_CLI_CONTEXT > [settings] context > production，旧键 environment 未迁移即报错指引 doctor（login / trace / daemon / configure resolve|verify / context show 共用，不允许第二条链）；
+ *        resolveContext 是后端 context 解析链的唯一入口：--context > $MAKE_CLI_CONTEXT > profile.context > [settings] context > production，回退 settings 时旧键 environment 未迁移即报错指引 doctor（login / trace / daemon / configure resolve|verify / context show 共用，不允许第二条链）；
  *        resolveProfile 收口凭证与配置解析；主机地址取值链 metaServerURL：flag > $MAKE_META_SERVER_URL > profile config > context 内置地址；repoServerURL 同构但无 flag 级（configure resolve / verify 同用，不允许手写第二条链），主机基址再经 withGateway 补网关前缀 /api/make
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
 package cmd
@@ -146,12 +146,19 @@ func withGateway(host string) string {
 const EnvContext = "MAKE_CLI_CONTEXT"
 
 // resolveContext 是后端 context 解析链的唯一入口，返回 context 名与其 preset：
-// --context flag > $MAKE_CLI_CONTEXT > [settings] context > DefaultContext。
-// 配置文件仍在用旧键（[settings] environment）时拒绝解析并指引 doctor --fix——
+// --context flag > $MAKE_CLI_CONTEXT > profile.context > [settings] context > DefaultContext。
+// 回退到全局默认且配置文件仍在用旧键（[settings] environment）时拒绝解析并指引 doctor --fix——
 // 不做静默回退：旧配置写着 dev 却悄悄落到 production 是最坏的兼容方式。
 // 未知 context 名（typo / 非法手抄）同样报错，避免静默落到错误后端。
 func resolveContext() (string, config.Context, error) {
 	name := firstNonEmpty(Context, os.Getenv(EnvContext))
+	if name == "" {
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			return "", config.Context{}, err
+		}
+		name = cfg[Profile].Context
+	}
 	if name == "" {
 		settings, err := config.LoadSettings()
 		if err != nil {

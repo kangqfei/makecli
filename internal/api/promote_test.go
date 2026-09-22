@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 api 包内的 Client.PromoteApp / Client.GetPromoteStatus / PromoteStatus（包内白盒），encoding/json、errors、net/http、net/http/httptest、testing
- * [OUTPUT]: 覆盖发布接口的单元测试（PromoteApp 请求形态 / 回执解析 / 缺 runId 报错 / 404 → ErrNotFound / 业务错误；GetPromoteStatus 请求携带 workflowId+runId / 字段解析（ID 字符串与数字两形态）/ 空 state → ErrNotFound）+ Finished/Succeeded 终态判定表测
+ * [OUTPUT]: 覆盖发布接口的单元测试（PromoteApp 请求形态 / 回执解析 / 缺 promoteId 报错 / 404 → ErrNotFound / 业务错误；GetPromoteStatus 请求携带 promoteId / 字段解析（ID 字符串与数字两形态）/ 空 state → ErrNotFound）+ Finished/Succeeded 终态判定表测
  * [POS]: internal/api 模块 promote.go 的配套测试，用 httptest 隔离网络
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -60,7 +60,7 @@ func promoteServer(t *testing.T, response string) (*httptest.Server, *string, *s
 func TestPromoteApp(t *testing.T) {
 	t.Run("sends CreateResource with beta key and parses run", func(t *testing.T) {
 		srv, target, path, body := promoteServer(t, `{"code":200,"msg":"成功","data":{"key":"myapp_beta_","type":"Make.App",
-			"properties":{"workflowId":"preview-publish:1:6142","runId":"7f96a378"}}}`)
+			"properties":{"promoteId":"7f96a378"}}}`)
 		run, err := New(srv.URL, "tok").PromoteApp("myapp_beta_")
 		if err != nil {
 			t.Fatal(err)
@@ -71,12 +71,12 @@ func TestPromoteApp(t *testing.T) {
 		if (*body)["key"] != "myapp_beta_" || (*body)["type"] != "Make.App" {
 			t.Fatalf("unexpected body: %v", *body)
 		}
-		if run.WorkflowID != "preview-publish:1:6142" || run.RunID != "7f96a378" {
+		if run.PromoteID != "7f96a378" {
 			t.Fatalf("unexpected run: %+v", run)
 		}
 	})
 
-	t.Run("missing runId is a contract error", func(t *testing.T) {
+	t.Run("missing promoteId is a contract error", func(t *testing.T) {
 		srv, _, _, _ := promoteServer(t, `{"code":200,"msg":"ok","data":{"properties":{}}}`)
 		if _, err := New(srv.URL, "tok").PromoteApp("myapp_beta_"); err == nil {
 			t.Fatal("expected error for empty run receipt")
@@ -101,13 +101,13 @@ func TestPromoteApp(t *testing.T) {
 }
 
 func TestGetPromoteStatus(t *testing.T) {
-	t.Run("sends StatusResource with workflowId and runId, parses progress", func(t *testing.T) {
+	t.Run("sends StatusResource with promoteId, parses progress", func(t *testing.T) {
 		srv, target, path, body := promoteServer(t, `{"code":200,"msg":"成功","data":{"key":"myapp_beta_","properties":{
-			"workflowId":"preview-publish:1:6142","runId":"7f96a378","type":"PUBLISH_PRODUCT",
+			"promoteId":"7f96a378","type":"PUBLISH_PRODUCT",
 			"state":"SUCCEEDED","step":"COMPLETED","productAppId":"6098","previewAppId":6142,
 			"sourceBuildTaskId":"1257","productBuildTaskId":1284,
 			"steps":[{"key":"PREPARING_PRODUCT_PUBLISH","name":"检查发布版本","state":"SUCCEEDED"}]}}}`)
-		st, err := New(srv.URL, "tok").GetPromoteStatus("myapp_beta_", "preview-publish:1:6142", "7f96a378")
+		st, err := New(srv.URL, "tok").GetPromoteStatus("myapp_beta_", "7f96a378")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -115,8 +115,8 @@ func TestGetPromoteStatus(t *testing.T) {
 			t.Fatalf("unexpected request: target=%q path=%q", *target, *path)
 		}
 		props, _ := (*body)["properties"].(map[string]any)
-		if props["workflowId"] != "preview-publish:1:6142" || props["runId"] != "7f96a378" {
-			t.Fatalf("status request must carry workflowId and runId: %v", *body)
+		if props["promoteId"] != "7f96a378" {
+			t.Fatalf("status request must carry promoteId: %v", *body)
 		}
 		if st.State != PromoteStateSucceeded || st.Step != "COMPLETED" || st.Type != "PUBLISH_PRODUCT" {
 			t.Fatalf("unexpected status: %+v", st)
@@ -133,7 +133,7 @@ func TestGetPromoteStatus(t *testing.T) {
 
 	t.Run("empty state is not found", func(t *testing.T) {
 		srv, _, _, _ := promoteServer(t, `{"code":200,"msg":"ok","data":{"properties":{}}}`)
-		_, err := New(srv.URL, "tok").GetPromoteStatus("myapp_beta_", "wf", "run")
+		_, err := New(srv.URL, "tok").GetPromoteStatus("myapp_beta_", "7f96a378")
 		if !errors.Is(err, ErrNotFound) {
 			t.Fatalf("expected ErrNotFound, got %v", err)
 		}

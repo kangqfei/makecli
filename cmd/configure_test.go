@@ -1,8 +1,8 @@
 /**
  * [INPUT]: 依赖 cmd 包内的 mask、validateJWT、validateConfigKey、runConfigureSet/Get、settingKeyNames、sampleConfig（包内白盒）
- * [OUTPUT]: 覆盖凭证遮掩、JWT 校验、config key 校验、全局键误投 configure 时拒绝并指路 settings 且不落盘、sample 模板完整性与真实 loader 有效性的单元测试
+ * [OUTPUT]: 覆盖凭证遮掩、JWT 校验、config key 校验、profile context 读写/校验/清除与全局隔离、仅限全局的键误投 configure 时拒绝并指路 settings 且不落盘、sample 模板完整性与真实 loader 有效性的单元测试
  * [POS]: cmd 模块 configure.go 的配套测试
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
 package cmd
@@ -90,6 +90,9 @@ func TestValidConfigKeys(t *testing.T) {
 func TestConfigureRejectsSettingKeys(t *testing.T) {
 	t.Setenv(config.EnvConfigDir, t.TempDir())
 	for _, key := range settingKeyNames() {
+		if slices.Contains(validConfigKeys, key) {
+			continue
+		}
 		err := runConfigureSet(key, "x")
 		if err == nil || !strings.Contains(err.Error(), "makecli settings set "+key) {
 			t.Errorf("configure set %s: expected redirect to settings, got %v", key, err)
@@ -133,6 +136,9 @@ func TestSampleConfig(t *testing.T) {
 			}
 		}
 		for _, key := range settingKeyNames() {
+			if slices.Contains(validConfigKeys, key) {
+				continue
+			}
 			if !strings.Contains(sampleConfig, key) {
 				t.Errorf("sampleConfig missing settings key %q", key)
 			}
@@ -170,6 +176,7 @@ func TestSampleConfig(t *testing.T) {
 		}
 		def := cfg["default"]
 		for name, got := range map[string]string{
+			"context":         def.Context,
 			"meta-server-url": def.MetaServerURL,
 			"repo-server-url": def.RepoServerURL,
 			"auth-server-url": def.AuthServerURL,
@@ -181,4 +188,48 @@ func TestSampleConfig(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestConfigureProfileContext(t *testing.T) {
+	t.Setenv(config.EnvConfigDir, t.TempDir())
+	setProfile(t, "named")
+	if err := config.SetSetting("context", "production"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runConfigureSet("context", "test"); err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(t, func() {
+		if err := runConfigureGet("context"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.TrimSpace(out) != "test" {
+		t.Fatalf("get = %q", out)
+	}
+	if err := runConfigureSet("context", "typo"); err == nil {
+		t.Fatal("invalid context accepted")
+	}
+	cfg, err := config.LoadConfig()
+	if err != nil || cfg["named"].Context != "test" {
+		t.Fatalf("invalid write changed profile: %v, %v", cfg, err)
+	}
+	if err := config.SetSetting("channel", "beta"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = config.LoadConfig()
+	if err != nil || cfg["named"].Context != "test" {
+		t.Fatalf("settings write lost context: %v, %v", cfg, err)
+	}
+	s, err := config.LoadSettings()
+	if err != nil || s.Context != "production" {
+		t.Fatalf("global context changed: %+v, %v", s, err)
+	}
+	if err := runConfigureSet("context", ""); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = config.LoadConfig()
+	if err != nil || cfg["named"].Context != "" {
+		t.Fatalf("clear failed: %v, %v", cfg, err)
+	}
 }

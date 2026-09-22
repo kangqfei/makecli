@@ -1,8 +1,8 @@
 /**
  * [INPUT]: 依赖 cmd 包内的 resolveAccessToken / metaServerURL / repoServerURL / resolveContext / contextName / 全局 AccessToken / MetaServerURL / Context（白盒），internal/config（Save/SetSetting）、strings、testing
- * [OUTPUT]: 覆盖 token 取值链（--access-token > $MAKE_ACCESS_TOKEN > credentials）、主机地址取值链（flag > $MAKE_*_SERVER_URL > profile config > context 内置地址）、context 解析优先级（flag > $MAKE_CLI_CONTEXT > settings > 默认、旧键 environment 拒绝并指引 doctor、flag 绕过旧键守卫、contextName 失败回显 unknown）与 withGateway 网关前缀拼接的单元测试
+ * [OUTPUT]: 覆盖 token 取值链（--access-token > $MAKE_ACCESS_TOKEN > credentials）、主机地址取值链（flag > $MAKE_*_SERVER_URL > profile config > context 内置地址）、context 解析优先级（flag > $MAKE_CLI_CONTEXT > profile.context > settings > 默认、旧键 environment 拒绝并指引 doctor、flag 绕过旧键守卫、contextName 失败回显 unknown）与 withGateway 网关前缀拼接的单元测试
  * [POS]: cmd 模块 client.go resolveAccessToken / resolveContext / withGateway 的配套测试，t.Setenv 隔离配置
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
 package cmd
@@ -276,4 +276,48 @@ func TestResolveChannel(t *testing.T) {
 			t.Fatal("expected error for unknown channel")
 		}
 	})
+}
+
+func TestResolveProfileContext(t *testing.T) {
+	cases := []struct {
+		name, flag, env, profile, global, want string
+		invalid                                bool
+	}{
+		{"profile over global", "", "", "test", "production", "test", false},
+		{"env over profile", "", "dev", "test", "production", "dev", false},
+		{"flag over env", "production", "dev", "test", "test", "production", false},
+		{"unset profile", "", "", "", "dev", "dev", false},
+		{"default", "", "", "", "", "production", false},
+		{"invalid profile", "", "", "typo", "dev", "", true},
+		{"invalid env", "", "typo", "test", "dev", "", true},
+		{"invalid flag", "typo", "dev", "test", "dev", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(config.EnvConfigDir, t.TempDir())
+			t.Setenv(EnvContext, tc.env)
+			setContextFlag(t, tc.flag)
+			setProfile(t, "selected")
+			if err := config.SaveConfig(config.Config{"selected": {Context: tc.profile}, "other": {Context: "production"}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := config.SetSetting("context", tc.global); err != nil {
+				t.Fatal(err)
+			}
+			name, preset, err := resolveContext()
+			if tc.invalid {
+				if err == nil || !strings.Contains(err.Error(), "unknown context") {
+					t.Fatalf("expected invalid context, got %v", err)
+				}
+				return
+			}
+			if err != nil || name != tc.want {
+				t.Fatalf("got %q, %v; want %q", name, err, tc.want)
+			}
+			wantPreset, _ := config.LookupContext(tc.want)
+			if preset != wantPreset {
+				t.Fatalf("preset = %+v, want %+v", preset, wantPreset)
+			}
+		})
+	}
 }

@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 bytes、encoding/json、errors、fmt、io、net/http、strings、time，依赖 debug.go 的 debugSink，依赖 internal/trace 的 TraceID/Traceparent
- * [OUTPUT]: 对外提供 Client 类型、ErrNotFound / ErrAuthFailed 哨兵错误、UniqueConstraintError 类型化错误（409 唯一性冲突，errors.As 判定）、Option / WithDebug(on, DebugFormat) / WithHeaders / WithDryRun / WithAppRole 功能选项、New 构造函数、App（Role / PairAppKey / HostedEnv / KeyForEnv：prod/beta 配对知识收口，环境 → 承载 app key）、RoleForEnv（HostedEnv 逆映射：环境 → app 角色）、RoleProd / RoleBeta 常量 / Field / Entity / EntityProperties / UniqueConstraint / RelationEnd / RelationProperties / Relation / Schema 类型、CreateApp(key, name, properties) / ListApps(page, size, filter) / DeleteApp(key) / GetApp(key) / CreateEntity(key, name, appKey, props) / ListEntities(appKey, page, size, filter) / GetEntity(appKey, key) / UpdateEntity(key, name, appKey, props) / DeleteEntity / CreateRelation(key, name, appKey, props) / UpdateRelation / ListRelations(appKey, ...) / GetRelation(appKey, key) / DeleteRelation / GetSchema(appKey) 方法。资源以 Key 为唯一标识符（英数下划线），Name 为用户可见展示名（支持中文）。Get* 方法在资源确实不存在时返回 ErrNotFound（可用 errors.Is 判定），其余错误（传输/非 not-found 业务码/解码）原样返回
+ * [OUTPUT]: 对外提供 Client 类型、ErrNotFound / ErrAuthFailed 哨兵错误、UniqueConstraintError 类型化错误（409 且 data 带 constraint 的唯一性冲突，errors.As 判定；其余 409 是业务规则拒绝，服务端 msg 原样返回）、Option / WithDebug(on, DebugFormat) / WithHeaders / WithDryRun / WithAppRole 功能选项、New 构造函数、App（Role / PairAppKey / HostedEnv / KeyForEnv：prod/beta 配对知识收口，环境 → 承载 app key）、RoleForEnv（HostedEnv 逆映射：环境 → app 角色）、RoleProd / RoleBeta 常量 / Field / Entity / EntityProperties / UniqueConstraint / RelationEnd / RelationProperties / Relation / Schema 类型、CreateApp(key, name, properties) / ListApps(page, size, filter) / DeleteApp(key) / GetApp(key) / CreateEntity(key, name, appKey, props) / ListEntities(appKey, page, size, filter) / GetEntity(appKey, key) / UpdateEntity(key, name, appKey, props) / DeleteEntity / CreateRelation(key, name, appKey, props) / UpdateRelation / ListRelations(appKey, ...) / GetRelation(appKey, key) / DeleteRelation / GetSchema(appKey) 方法。资源以 Key 为唯一标识符（英数下划线），Name 为用户可见展示名（支持中文）。Get* 方法在资源确实不存在时返回 ErrNotFound（可用 errors.Is 判定），其余错误（传输/非 not-found 业务码/解码）原样返回
  * [POS]: internal/api 的核心，封装 Make Meta Service 的 HTTP 调用
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -47,27 +47,20 @@ func authFailedErr(code int, message string) error {
 	return fmt.Errorf("%w [%d]: %s", ErrAuthFailed, code, message)
 }
 
-// conflictCode 是写入违反唯一性约束时后端返回的业务码（见 DataAPIDesign 唯一性约束冲突）。
+// conflictCode 是写入被业务规则拒绝时后端返回的业务码：违反唯一性约束（DataAPIDesign，data 带 constraint/fields）、
+// prod app 仍有 beta 配对、Relation 仍被 ReferenceField 绑定（MetaAPIDesign）等都用它，具体含义由 msg / data 形态区分。
 const conflictCode = 409
 
 // UniqueConstraintError 表示写入（创建/更新/批量更新 Record）违反了 Entity 的唯一性约束。
-// 与 ErrNotFound / ErrAuthFailed 同为 api 层「只报事实、不管呈现」的分层边界：
-// api 携带冲突的约束名 Constraint 与参与字段 Fields，cmd 层直接展示其自解释的 Error() 串。
+// 只在 409 响应的 data 带 constraint 时构造（那是唯一性冲突独有的形态），携带约束名与字段供上层渲染。
 // 用 errors.As(err, &api.UniqueConstraintError{}) 判定。
 type UniqueConstraintError struct {
 	Constraint string   // 冲突的唯一约束名
 	Fields     []string // 参与该约束的字段 key
-	Message    string   // 后端原始 msg（约束名/字段缺失时的兜底）
 }
 
 func (e *UniqueConstraintError) Error() string {
-	if e.Constraint != "" && len(e.Fields) > 0 {
-		return fmt.Sprintf("唯一性约束冲突 [%s]：字段 (%s) 已存在相同值", e.Constraint, strings.Join(e.Fields, ", "))
-	}
-	if e.Message != "" {
-		return "唯一性约束冲突：" + e.Message
-	}
-	return "唯一性约束冲突"
+	return fmt.Sprintf("唯一性约束冲突 [%s]：字段 (%s) 已存在相同值", e.Constraint, strings.Join(e.Fields, ", "))
 }
 
 // conflictData 承载 409 唯一性冲突响应的 data 形态（constraint + fields）。
@@ -76,16 +69,23 @@ type conflictData struct {
 	Fields     []string `json:"fields"`
 }
 
-// writeStatusErr 把写操作的非 200 业务码翻译成错误：409 唯一性冲突翻译为 UniqueConstraintError
-// （携带约束名与字段），其余沿用通用「API 错误」。收口原本散落各写方法的非 200 翻译重复。
+// writeStatusErr 把写操作的非 200 业务码翻译成错误，收口原本散落各写方法的非 200 翻译重复：
+//   - 409 且 data 带 constraint → UniqueConstraintError（唯一性冲突独有形态）
+//   - 其余 409 → 服务端 msg 原样返回：这是业务规则拒绝（如 prod app 仍有 beta 配对），msg 已是给用户的完整说明，
+//     不套「唯一性」或「API 错误」前缀
+//   - 其余业务码 → 通用「API 错误 [code]: msg」
 //
 // data 以原始字节传入、只在 409 分支解析：成功响应的 data 形态由各端点自定
-// （对象 / 布尔 / 数组皆有），写路径不该对它提任何要求。解析失败退回 msg 兜底。
+// （对象 / 布尔 / 数组皆有），写路径不该对它提任何要求。
 func writeStatusErr(code int, msg string, data json.RawMessage) error {
 	if code == conflictCode {
 		var conflict conflictData
-		_ = json.Unmarshal(data, &conflict)
-		return &UniqueConstraintError{Constraint: conflict.Constraint, Fields: conflict.Fields, Message: msg}
+		if json.Unmarshal(data, &conflict) == nil && conflict.Constraint != "" {
+			return &UniqueConstraintError{Constraint: conflict.Constraint, Fields: conflict.Fields}
+		}
+		if msg != "" {
+			return errors.New(msg)
+		}
 	}
 	return fmt.Errorf("API 错误 [%d]: %s", code, msg)
 }
@@ -663,7 +663,7 @@ func (c *Client) request(method, target, path string, body, result any) error {
 
 // post 是 do 的便捷包装，用于只需检查 code == 200 的写操作。
 // data 原样收着不解析（各端点成功形态不一，DeleteApp 就回 true），
-// 非 200 经 writeStatusErr 翻译——409 → UniqueConstraintError（届时才解析 data），其余 → 通用错误。
+// 非 200 经 writeStatusErr 翻译——409 按 data 形态分流（带 constraint → UniqueConstraintError，否则服务端 msg 原样），其余 → 通用错误。
 func (c *Client) post(target, path string, body any) error {
 	var result struct {
 		Code    int             `json:"code"`

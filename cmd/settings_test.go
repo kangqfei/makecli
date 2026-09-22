@@ -2,7 +2,7 @@
  * [INPUT]: 依赖 settings.go 的 setSetting / runSettingsGet / runSettingsList / settingKeys / newSettingsCmd；captureStdout / stubStdoutTerminal 测试辅助；internal/config 隔离配置
  * [OUTPUT]: 覆盖 settings 命令组的单元测试（set 各键写入与取值校验 / 未知键列合法键 / profile 键误投指路 configure 且不写 profile / 不受 --profile 影响、get 生效值与缺省回退、list 表格与 JSON 含来源、键表与 Settings 字段一一对应、子命令注册）
  * [POS]: cmd 模块 settings.go 的配套测试
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
 package cmd
@@ -69,6 +69,9 @@ func TestSettingsSet(t *testing.T) {
 	t.Run("profile key redirects to configure", func(t *testing.T) {
 		t.Setenv(config.EnvConfigDir, t.TempDir())
 		for _, key := range validConfigKeys {
+			if isSettingKey(key) {
+				continue
+			}
 			err := setSetting(key, "x")
 			if err == nil || !strings.Contains(err.Error(), "makecli configure set "+key) {
 				t.Errorf("settings set %s: expected redirect to configure, got %v", key, err)

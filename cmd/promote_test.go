@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 cmd 包内的 runPromote / runPromoteStatus / confirmPromoteFunc / errPromoteFailed / errWaitTimeout / promoteRunPath / promoteTarget（包内白盒）、enterAppDir / saveDefaultToken / stubMetaServer / stubPollInterval / captureStdout（既有测试 helper），encoding/json、errors、net/http、net/http/httptest、os、strings、testing、time
+ * [INPUT]: 依赖 cmd 包内的 runPromote / runPromoteStatus / newPromoteCmd / confirmPromoteFunc / errPromoteFailed / errWaitTimeout（包内白盒）、enterAppDir / saveDefaultToken / stubMetaServer / stubPollInterval / captureStdout（既有测试 helper），encoding/json、errors、net/http、net/http/httptest、strings、testing、time
  * [OUTPUT]: 覆盖 promote 子命令的单元测试（发起：CreateResource 以 beta key 发起、回执落盘、确认门控 abort 短路不触达发布接口、--yes 跳过确认、beta 从未部署 fail-fast、总览失败降级不阻断、无 beta 配对报错；--status：无记录报错、轮询至 SUCCEEDED 带 production URL、跃迁去重、FAILED → errPromoteFailed、超时 → errWaitTimeout、not-found 窗口期容忍、json 模式 stdout 纯 JSON）
  * [POS]: cmd 模块 promote.go 的配套测试，用 httptest 按路径 + X-Make-Target 路由的 Meta mock（promoteMeta）隔离网络，stubConfirmPromote 打桩终端确认
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -12,7 +12,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -42,7 +41,7 @@ func (m *promoteMeta) serve(t *testing.T) *httptest.Server {
 			m.createKey, _ = body["key"].(string)
 			_ = json.NewEncoder(w).Encode(map[string]any{"code": 200, "msg": "成功", "data": map[string]any{
 				"key": body["key"], "type": "Make.App",
-				"properties": map[string]any{"workflowId": "preview-publish:1:6142", "runId": "run-1"},
+				"properties": map[string]any{"promoteId": "run-1"},
 			}})
 		case strings.Contains(r.URL.Path, "/console/v1/app-environment/product"):
 			i := min(m.statusCalls, len(m.statusSeq)-1)
@@ -76,7 +75,7 @@ func (m *promoteMeta) serve(t *testing.T) *httptest.Server {
 // promoteSnap 构造一帧发布进度快照
 func promoteSnap(state, step string) map[string]any {
 	return map[string]any{
-		"workflowId": "preview-publish:1:6142", "runId": "run-1", "type": "PUBLISH_PRODUCT",
+		"promoteId": "run-1", "type": "PUBLISH_PRODUCT",
 		"state": state, "step": step, "sourceBuildTaskId": "1257",
 		"steps": []map[string]any{{"key": "PREPARING_PRODUCT_PUBLISH", "name": "检查发布版本", "state": "SUCCEEDED"}},
 	}
@@ -91,7 +90,7 @@ func stubConfirmPromote(t *testing.T, err error) *int {
 	return calls
 }
 
-// setupPromote 进入已注册 app 工程、隔离 HOME（config.Dir → 记录文件）、调小轮询间隔
+// setupPromote 进入已注册 app 工程、隔离 HOME、调小轮询间隔
 func setupPromote(t *testing.T, m *promoteMeta) {
 	t.Helper()
 	enterAppDir(t, "myapp")
@@ -99,23 +98,6 @@ func setupPromote(t *testing.T, m *promoteMeta) {
 	saveDefaultToken(t)
 	stubPollInterval(t)
 	stubMetaServer(t, m.serve(t).URL)
-}
-
-func recordedRun(t *testing.T) promoteRunRecord {
-	t.Helper()
-	path, err := promoteRunPath(&promoteTarget{context: "production", betaKey: "myapp_beta_"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("promote run record not written: %v", err)
-	}
-	var rec promoteRunRecord
-	if err := json.Unmarshal(data, &rec); err != nil {
-		t.Fatal(err)
-	}
-	return rec
 }
 
 func TestRunPromote(t *testing.T) {
@@ -132,14 +114,10 @@ func TestRunPromote(t *testing.T) {
 		if *confirms != 1 || m.createCalls != 1 || m.createKey != "myapp_beta_" {
 			t.Fatalf("confirm=%d create=%d key=%q", *confirms, m.createCalls, m.createKey)
 		}
-		for _, want := range []string{"Source:      beta  abc1234  (myapp_beta_)", "Target:      production  (current: 9f8e7d6)", "Promote started: run run-1", "promote --status"} {
+		for _, want := range []string{"Source:      beta  abc1234  (myapp_beta_)", "Target:      production  (current: 9f8e7d6)", "Promote ID:  run-1", "promote --status --id run-1"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("stdout missing %q:\n%s", want, out)
 			}
-		}
-		rec := recordedRun(t)
-		if rec.WorkflowID != "preview-publish:1:6142" || rec.RunID != "run-1" || rec.App != "myapp" {
-			t.Fatalf("unexpected record: %+v", rec)
 		}
 	})
 
@@ -238,36 +216,28 @@ func TestRunPromote(t *testing.T) {
 }
 
 func TestRunPromoteStatus(t *testing.T) {
-	// startRun 先跑一次 promote 落下记录
-	startRun := func(t *testing.T, m *promoteMeta) {
-		t.Helper()
-		setupPromote(t, m)
-		_ = captureStdout(t, func() {
-			if err := runPromote(true, false, defaultPromoteTimeout, outputTable); err != nil {
-				t.Fatal(err)
+	t.Run("--status and --id must come together", func(t *testing.T) {
+		// 旗标校验在 RunE 入口、先于一切定位与网络：两种缺半边都拒绝
+		for _, args := range [][]string{{"--status"}, {"--id", "run-1"}} {
+			cmd := newPromoteCmd()
+			cmd.SetArgs(args)
+			if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "--id") {
+				t.Errorf("args %v: expected --status/--id pairing error, got %v", args, err)
 			}
-		})
-	}
-
-	t.Run("no record is an actionable error", func(t *testing.T) {
-		setupPromote(t, &promoteMeta{betaDeployed: true})
-		err := runPromoteStatus(false, defaultPromoteTimeout, outputTable)
-		if err == nil || !strings.Contains(err.Error(), "没有发布记录") {
-			t.Fatalf("expected no-record error, got %v", err)
 		}
 	})
 
-	t.Run("queries with recorded workflowId and runId", func(t *testing.T) {
+	t.Run("queries with the given promoteId", func(t *testing.T) {
 		m := &promoteMeta{betaDeployed: true, statusSeq: []map[string]any{promoteSnap("RUNNING", "PUSHING_PRODUCT_CODE")}}
-		startRun(t, m)
+		setupPromote(t, m)
 		out := captureStdout(t, func() {
-			if err := runPromoteStatus(false, defaultPromoteTimeout, outputTable); err != nil {
+			if err := runPromoteStatus("run-1", false, defaultPromoteTimeout, outputTable); err != nil {
 				t.Fatal(err)
 			}
 		})
 		props, _ := m.statusBodies[0]["properties"].(map[string]any)
-		if m.statusBodies[0]["key"] != "myapp_beta_" || props["workflowId"] != "preview-publish:1:6142" || props["runId"] != "run-1" {
-			t.Fatalf("status request must carry beta key + recorded ids: %v", m.statusBodies[0])
+		if m.statusBodies[0]["key"] != "myapp_beta_" || props["promoteId"] != "run-1" {
+			t.Fatalf("status request must carry beta key + given promoteId: %v", m.statusBodies[0])
 		}
 		for _, want := range []string{"State:       RUNNING", "Step:        PUSHING_PRODUCT_CODE", "Beta build:  #1257", "SUCCEEDED  检查发布版本 (PREPARING_PRODUCT_PUBLISH)"} {
 			if !strings.Contains(out, want) {
@@ -284,9 +254,9 @@ func TestRunPromoteStatus(t *testing.T) {
 			promoteSnap("RUNNING", "SYNCING_PRODUCT_CONFIG"), promoteSnap("RUNNING", "SYNCING_PRODUCT_CONFIG"),
 			promoteSnap("RUNNING", "WAITING_PRODUCT_DEPLOYMENT"), promoteSnap("SUCCEEDED", "COMPLETED"),
 		}}
-		startRun(t, m)
+		setupPromote(t, m)
 		out := captureStdout(t, func() {
-			if err := runPromoteStatus(true, time.Second, outputTable); err != nil {
+			if err := runPromoteStatus("run-1", true, time.Second, outputTable); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -302,9 +272,9 @@ func TestRunPromoteStatus(t *testing.T) {
 		snap := promoteSnap("FAILED", "PUSHING_PRODUCT_CODE")
 		snap["message"] = "build failed"
 		m := &promoteMeta{betaDeployed: true, statusSeq: []map[string]any{snap}}
-		startRun(t, m)
+		setupPromote(t, m)
 		out := captureStdout(t, func() {
-			err := runPromoteStatus(true, time.Second, outputTable)
+			err := runPromoteStatus("run-1", true, time.Second, outputTable)
 			if !errors.Is(err, errPromoteFailed) {
 				t.Fatalf("expected errPromoteFailed, got %v", err)
 			}
@@ -319,9 +289,9 @@ func TestRunPromoteStatus(t *testing.T) {
 
 	t.Run("--wait tolerates not-found window then times out", func(t *testing.T) {
 		m := &promoteMeta{betaDeployed: true, statusSeq: []map[string]any{{}}}
-		startRun(t, m)
+		setupPromote(t, m)
 		_ = captureStdout(t, func() {
-			err := runPromoteStatus(true, 20*time.Millisecond, outputTable)
+			err := runPromoteStatus("run-1", true, 20*time.Millisecond, outputTable)
 			if !errors.Is(err, errWaitTimeout) {
 				t.Fatalf("expected errWaitTimeout, got %v", err)
 			}

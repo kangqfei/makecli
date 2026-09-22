@@ -1,14 +1,14 @@
 /**
- * [INPUT]: 依赖 cmd/client（newClientFromProfile/resolveContext）、cmd/deploy（appKeyFromDSL/assertAppRegistered/envURLFor/errWaitTimeout/buildPollInterval/shortSha）、cmd/output（resolveOutputFormat/writeJSON/addOutputFlag）、internal/api（PromoteApp/GetPromoteStatus/PromoteRun/PromoteStatus/GetDeploymentOverview/EnvBeta/EnvProduction/ErrNotFound）、internal/config（Dir）、encoding/json、errors、fmt、io、os、path/filepath、time、charm.land/huh/v2（production 确认表单）、github.com/mattn/go-isatty（TTY 检测）、github.com/spf13/cobra
- * [OUTPUT]: 对外提供 newPromoteCmd 函数；包内 runPromote / runPromoteStatus（发起发布 / 查进度两条主路径）、promoteTarget + resolvePromoteTarget（app.yaml → 已注册 App → beta/prod 双 key 定位）、waitAndRenderPromote / waitForPromote / renderPromoteResult / renderPromoteStatus（等待与渲染）、promoteReceipt / promoteStatusView（JSON 视图）、promoteRunRecord + savePromoteRun / loadPromoteRun / promoteRunPath（本地 run 记录）、errPromoteFailed 退出码哨兵（errors.go ExitCode 翻译为 2）、defaultPromoteTimeout 常量、confirmProductionPromote（production 确认护栏：huh confirm + go-isatty，非交互拒绝并指引 --yes）；包级 confirmPromoteFunc 可打桩变量
+ * [INPUT]: 依赖 cmd/client（newClientFromProfile）、cmd/deploy（appKeyFromDSL/assertAppRegistered/envURLFor/errWaitTimeout/buildPollInterval/shortSha）、cmd/output（resolveOutputFormat/writeJSON/addOutputFlag）、internal/api（PromoteApp/GetPromoteStatus/PromoteRun/PromoteStatus/GetDeploymentOverview/EnvBeta/EnvProduction/ErrNotFound）、encoding/json、errors、fmt、io、os、time、charm.land/huh/v2（production 确认表单）、github.com/mattn/go-isatty（TTY 检测）、github.com/spf13/cobra
+ * [OUTPUT]: 对外提供 newPromoteCmd 函数；包内 runPromote / runPromoteStatus（发起发布 / 查进度两条主路径）、promoteTarget + resolvePromoteTarget（app.yaml → 已注册 App → beta/prod 双 key 定位）、waitAndRenderPromote / waitForPromote / renderPromoteResult / renderPromoteStatus（等待与渲染）、promoteReceipt / promoteStatusView（JSON 视图）、errPromoteFailed 退出码哨兵（errors.go ExitCode 翻译为 2）、defaultPromoteTimeout 常量、confirmProductionPromote（production 确认护栏：huh confirm + go-isatty，非交互拒绝并指引 --yes）；包级 confirmPromoteFunc 可打桩变量
  * [POS]: cmd 模块 app 命令组的 promote 子命令——对标 vercel promote：把 beta 环境当前生效的版本发布到 production，
  *        输入是服务端的 beta 状态而非本地代码（不 push、不读本地 git），「先 beta 后 production」因此是结构约束而非校验分支。
  *        流程：app.yaml 取 key → assertAppRegistered → KeyForEnv 定位 beta/prod 两个 app → 部署总览取 beta 当前 commit
  *        做来源摘要（beta 从未部署即 fail-fast；总览查询失败降级为 unknown 交服务端裁决）→ production 确认（--yes 跳过，
- *        非交互拒绝）→ api.PromoteApp 发起（服务端 Temporal 异步流程，回执 workflowId+runId）→ 回执落盘
- *        <config.Dir>/promote/<context>--<betaKey>.json（runId 每次不同、查进度必须同传，落盘后 --status 免抄 ID；
- *        按 context 分文件，dev/test/production 后端的同名 app 互不串号）。--status 读该记录查进度，--wait 轮询至终态
- *        （promote --wait = 发起后接上与 --status --wait 同一条等待路径），进度只在 state/step 跃迁时打一行，
+ *        非交互拒绝）→ api.PromoteApp 发起（服务端 Temporal 异步流程，回执 promoteId）→ 打印 Promote ID 与
+ *        `promote --status --id <promoteId>` 指引。promoteId 是发布的唯一句柄，由用户显式带回：--status 必须搭配 --id，
+ *        CLI 不落盘、不猜「最近一次」。--wait 轮询至终态（promote --wait = 发起后接上与 --status --wait 同一条等待路径），
+ *        进度只在 state/step 跃迁时打一行，
  *        json 模式进度走 stderr、stdout 只留最终对象；未成功 errPromoteFailed（退出码 2）、超时 errWaitTimeout（124）。
  *        成功后经 envURLFor 带出 production 访问 URL。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -22,13 +22,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"time"
 
 	"charm.land/huh/v2"
 	"github.com/mattn/go-isatty"
 	"github.com/qfeius/makecli/internal/api"
-	"github.com/qfeius/makecli/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -44,6 +42,7 @@ const defaultPromoteTimeout = 10 * time.Minute
 func newPromoteCmd() *cobra.Command {
 	var yes bool
 	var status bool
+	var id string
 	var wait bool
 	var timeout time.Duration
 	var output string
@@ -59,9 +58,9 @@ environment, so an app must be deployed to beta first. The publish runs
 asynchronously on the server; --wait blocks until it reaches a terminal state.`,
 		Example: `  makecli app promote                         # beta → production（需确认）
   makecli app promote --yes --wait            # CI / 非交互：跳过确认并阻塞至终态（退出码 0 成功 / 2 失败 / 124 超时）
-  makecli app promote --status                # 查询最近一次发布的进度
-  makecli app promote --status --wait         # 只等待发布终态，不发起新发布
-  makecli app promote --status --output json  # 机器可读的进度快照`,
+  makecli app promote --status --id <promoteId>          # 查询指定发布的进度（ID 由 promote 输出）
+  makecli app promote --status --id <promoteId> --wait   # 只等待该发布终态，不发起新发布
+  makecli app promote --status --id <promoteId> --output json`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			output, err := resolveOutputFormat(output)
@@ -74,15 +73,19 @@ asynchronously on the server; --wait blocks until it reaches a terminal state.`,
 			if wait && timeout <= 0 {
 				return errors.New("--timeout 必须大于 0")
 			}
+			if status != (id != "") {
+				return errors.New("--status 与 --id <promoteId> 必须同时给出")
+			}
 			if status {
-				return runPromoteStatus(wait, timeout, output)
+				return runPromoteStatus(id, wait, timeout, output)
 			}
 			return runPromote(yes, wait, timeout, output)
 		},
 	}
 
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip the production promote confirmation prompt")
-	cmd.Flags().BoolVar(&status, "status", false, "show progress of the last promote instead of starting one")
+	cmd.Flags().BoolVar(&status, "status", false, "show progress of a promote instead of starting one (requires --id)")
+	cmd.Flags().StringVar(&id, "id", "", "promote ID to query, as printed by app promote")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until the promote reaches a terminal state")
 	cmd.Flags().DurationVar(&timeout, "timeout", defaultPromoteTimeout, "max time to wait for the promote (requires --wait)")
 	addOutputFlag(cmd, &output)
@@ -94,7 +97,6 @@ type promoteTarget struct {
 	appKey  string
 	betaKey string
 	prodKey string
-	context string
 }
 
 // resolvePromoteTarget 从 app.yaml 取 key，经 Meta 注册门控后按配对信息定位 beta 与 prod 两个 app。
@@ -116,11 +118,7 @@ func resolvePromoteTarget() (*promoteTarget, error) {
 	if err != nil {
 		return nil, err
 	}
-	ctx, _, err := resolveContext()
-	if err != nil {
-		return nil, err
-	}
-	return &promoteTarget{appKey: appKey, betaKey: betaKey, prodKey: prodKey, context: ctx}, nil
+	return &promoteTarget{appKey: appKey, betaKey: betaKey, prodKey: prodKey}, nil
 }
 
 // promoteReceipt 是发起发布后的回执视图（json 模式 stdout 输出）
@@ -130,7 +128,7 @@ type promoteReceipt struct {
 	api.PromoteRun
 }
 
-// runPromote 编排 beta → production 发布：定位 → 来源摘要 → 确认 → 发起 → 落盘回执 →（--wait）等待。
+// runPromote 编排 beta → production 发布：定位 → 来源摘要 → 确认 → 发起 → 打印 promoteId →（--wait）等待。
 // 摘要把 beta 当前 commit 打出来让用户看见发的是什么——本地 HEAD 可能与 beta 不一致，
 // promote 的语义是「发布 beta 上的东西」，故不阻断，只呈现。
 func runPromote(skipConfirm, wait bool, timeout time.Duration, output string) error {
@@ -167,11 +165,8 @@ func runPromote(skipConfirm, wait bool, timeout time.Duration, output string) er
 	if err != nil {
 		return fmt.Errorf("发起发布失败: %w", err)
 	}
-	// 落盘失败不回滚已发起的发布——只是 --status 用不了，警告并把 runId 留在输出里
-	if err := savePromoteRun(target, run); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "warning: 无法记录发布任务（--status 将不可用）: %v\n", err)
-	}
-	_, _ = fmt.Fprintf(info, "Promote started: run %s\n", run.RunID)
+	// promoteId 是这次发布的唯一句柄，用户拿它查进度；json 模式进 stdout 的回执对象
+	_, _ = fmt.Fprintf(info, "%-12s %s\n", "Promote ID:", run.PromoteID)
 
 	if wait {
 		return waitAndRenderPromote(client, target, run, timeout, output)
@@ -179,7 +174,7 @@ func runPromote(skipConfirm, wait bool, timeout time.Duration, output string) er
 	if output == outputJSON {
 		return writeJSON(promoteReceipt{App: target.appKey, BetaApp: target.betaKey, PromoteRun: *run})
 	}
-	fmt.Println("Track progress: makecli app promote --status")
+	fmt.Printf("Track progress: makecli app promote --status --id %s\n", run.PromoteID)
 	return nil
 }
 
@@ -206,15 +201,10 @@ func commitLabel(env *api.EnvDeployment) string {
 	return shortSha(env.CommitSha)
 }
 
-// runPromoteStatus 查询最近一次发布的进度（wait=true 时阻塞至终态）。
-// 定位与 promote 同源（app.yaml + Meta），run 标识来自本地记录——服务端要求 workflowId+runId 同传，
-// 落盘即免让用户抄 ID，重跑幂等地接上同一次发布。
-func runPromoteStatus(wait bool, timeout time.Duration, output string) error {
+// runPromoteStatus 按 promoteId 查询一次发布的进度（wait=true 时阻塞至终态）。
+// 定位与 promote 同源（app.yaml + Meta），promoteId 由用户显式给出（promote 已打印）。
+func runPromoteStatus(promoteID string, wait bool, timeout time.Duration, output string) error {
 	target, err := resolvePromoteTarget()
-	if err != nil {
-		return err
-	}
-	rec, err := loadPromoteRun(target)
 	if err != nil {
 		return err
 	}
@@ -222,14 +212,14 @@ func runPromoteStatus(wait bool, timeout time.Duration, output string) error {
 	if err != nil {
 		return err
 	}
-	run := &api.PromoteRun{WorkflowID: rec.WorkflowID, RunID: rec.RunID}
+	run := &api.PromoteRun{PromoteID: promoteID}
 	if wait {
 		return waitAndRenderPromote(client, target, run, timeout, output)
 	}
-	st, err := client.GetPromoteStatus(target.betaKey, run.WorkflowID, run.RunID)
+	st, err := client.GetPromoteStatus(target.betaKey, run.PromoteID)
 	if err != nil {
 		if errors.Is(err, api.ErrNotFound) {
-			return fmt.Errorf("发布任务 %s 不存在（可能已过期），可重新 makecli app promote", run.RunID)
+			return fmt.Errorf("发布任务 %s 不存在（可能已过期），可重新 makecli app promote", run.PromoteID)
 		}
 		return fmt.Errorf("查询发布进度失败: %w", err)
 	}
@@ -251,7 +241,7 @@ func waitAndRenderPromote(client *api.Client, target *promoteTarget, run *api.Pr
 	if output == outputJSON {
 		progress = os.Stderr
 	}
-	_, _ = fmt.Fprintf(progress, "Waiting for promote run %s (timeout %s) ...\n", run.RunID, timeout)
+	_, _ = fmt.Fprintf(progress, "Waiting for promote run %s (timeout %s) ...\n", run.PromoteID, timeout)
 
 	st, err := waitForPromote(client, target.betaKey, run, timeout, progress)
 	if err != nil {
@@ -273,7 +263,7 @@ func waitForPromote(client *api.Client, betaKey string, run *api.PromoteRun, tim
 	deadline := time.Now().Add(timeout)
 	lastLabel := ""
 	for {
-		st, err := client.GetPromoteStatus(betaKey, run.WorkflowID, run.RunID)
+		st, err := client.GetPromoteStatus(betaKey, run.PromoteID)
 		if err != nil && !errors.Is(err, api.ErrNotFound) {
 			return nil, fmt.Errorf("查询发布进度失败: %w", err)
 		}
@@ -321,7 +311,7 @@ func renderPromoteStatus(target *promoteTarget, st *api.PromoteStatus, url strin
 	rows := []struct{ label, value string }{
 		{"App:", target.appKey},
 		{"Beta app:", target.betaKey},
-		{"Run:", st.RunID},
+		{"Run:", st.PromoteID},
 		{"Type:", st.Type},
 		{"State:", st.State},
 		{"Step:", st.Step},
@@ -351,71 +341,6 @@ func buildRef(id json.Number) string {
 		return ""
 	}
 	return "#" + id.String()
-}
-
-// ---------------------------------- 本地 run 记录 ----------------------------------
-
-// promoteRunRecord 是落盘的发布回执：查进度必须 workflowId+runId 同传，记录让 --status 免抄 ID。
-type promoteRunRecord struct {
-	App        string `json:"app"`
-	BetaApp    string `json:"betaApp"`
-	WorkflowID string `json:"workflowId"`
-	RunID      string `json:"runId"`
-	StartedAt  string `json:"startedAt"`
-}
-
-// promoteRunPath 返回记录文件路径 <config.Dir>/promote/<context>--<betaKey>.json。
-// 按 context 分文件：dev/test/production 后端上的同名 app 是不同的 app，记录不能串。
-func promoteRunPath(target *promoteTarget) (string, error) {
-	dir, err := config.Dir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "promote", target.context+"--"+target.betaKey+".json"), nil
-}
-
-// savePromoteRun 覆盖写入最近一次发布的回执
-func savePromoteRun(target *promoteTarget, run *api.PromoteRun) error {
-	path, err := promoteRunPath(target)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	rec := promoteRunRecord{
-		App: target.appKey, BetaApp: target.betaKey,
-		WorkflowID: run.WorkflowID, RunID: run.RunID,
-		StartedAt: time.Now().UTC().Format(time.RFC3339),
-	}
-	data, err := json.MarshalIndent(rec, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
-}
-
-// loadPromoteRun 读取最近一次发布的回执；无记录给可操作错误指引先 promote。
-func loadPromoteRun(target *promoteTarget) (*promoteRunRecord, error) {
-	path, err := promoteRunPath(target)
-	if err != nil {
-		return nil, err
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("app '%s' 在 context %s 下没有发布记录，请先 makecli app promote", target.appKey, target.context)
-		}
-		return nil, err
-	}
-	var rec promoteRunRecord
-	if err := json.Unmarshal(data, &rec); err != nil {
-		return nil, fmt.Errorf("发布记录 %s 损坏: %w", path, err)
-	}
-	if rec.WorkflowID == "" || rec.RunID == "" {
-		return nil, fmt.Errorf("发布记录 %s 缺少 workflowId/runId，请重新 makecli app promote", path)
-	}
-	return &rec, nil
 }
 
 // confirmProductionPromote 在发布到 production 前要求 continue/abort 确认（与 app delete 同款 huh 护栏）。

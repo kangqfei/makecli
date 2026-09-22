@@ -1,13 +1,13 @@
 /**
  * [INPUT]: 依赖 cmd/client（newClientFromProfile/newRepoClientFromProfile）、cmd/app（loadAppManifestFromFile/validResourceKey）、cmd/app_create（appDSLPath）、cmd/git（openRepo/assertDeployable）、cmd/output（resolveOutputFormat/writeJSON/outputAuto/outputFlagUsage）、internal/api（ErrNotFound 哨兵、GetBuildTask/BuildTask 及 Finished/Succeeded 终态判定、GetDeploymentOverview/DeploymentOverview.Env 环境 URL）、errors、fmt、io、os、time、github.com/go-git/go-git/v5（及 config/plumbing/transport/http 子包）、github.com/spf13/cobra
- * [OUTPUT]: 对外提供 newDeployCmd 函数；包内 assertAppRegistered（push 前 Meta 注册门控，返回 App 供 KeyForEnv 定位承载环境的 app）、runDeployStatus/waitAndRenderBuild/waitForBuild/deploymentURLFor/envURLFor（与 promote 共用的环境 URL 取址）/renderBuildResult/renderBuildStatus/formatBuildError/shortSha（--status/--wait 构建进度查询、等待与渲染）、buildStatusView（JSON 视图：BuildTask 平铺 + url omitempty）、errBuildFailed/errWaitTimeout 退出码哨兵（errors.go ExitCode 翻译为 2/124）、defaultWaitTimeout 常量；包级 gitPushFunc 可打桩变量（测试替换推送，参照 update.go applyFunc 模式）、buildPollInterval 可打桩轮询间隔；envBeta 常量（别名 api.EnvBeta，deploy 唯一目标）
+ * [OUTPUT]: 对外提供 newDeployCmd 函数；包内 betaRepoURL（注册门控 → KeyForEnv(beta) → 幂等 CreateRepository → cloneUrl+token，deploy push 与 clone fetch 共用的仓库定位）、assertAppRegistered（Meta 注册门控，返回 App 供 KeyForEnv 定位承载环境的 app）、appKeyFromDSL/appKeyFromManifest（工程根 / 任意路径读 app.yaml key）、runDeployStatus/waitAndRenderBuild/waitForBuild/deploymentURLFor/envURLFor（与 promote 共用的环境 URL 取址）/renderBuildResult/renderBuildStatus/formatBuildError/shortSha（--status/--wait 构建进度查询、等待与渲染）、buildStatusView（JSON 视图：BuildTask 平铺 + url omitempty）、errBuildFailed/errWaitTimeout 退出码哨兵（errors.go ExitCode 翻译为 2/124）、defaultWaitTimeout 常量；包级 gitPushFunc 可打桩变量（测试替换推送，参照 update.go applyFunc 模式）、buildPollInterval 可打桩轮询间隔；envBeta 常量（别名 api.EnvBeta，deploy 唯一目标）、deployBranch / anonymousRemote 常量（clone 复用同一分支与匿名 remote 约定）
  * [POS]: cmd 模块 app 命令组的 deploy 子命令——「纯 push 已提交状态」，目标只有 beta（无 --env：production 没有本地 push 入口，只能经 app promote 从 beta 发布，「先 beta 后 production」是结构约束；用户面词汇 beta，服务端 key preview 的翻译收口在 api.ServerEnvKey/DisplayEnv）。--status 短路部署，改为按本地 HEAD sha 反查构建服务（api.GetBuildTask，commitSha 即任务定位键）平铺渲染部署进度；--output table|json 双格式（json 仅限 --status 模式，deploy 推送输出会混入 stdout）。--wait 阻塞至构建终态（deploy --wait = push 后接上与 --status --wait 完全同一条等待路径）：轮询间隔 buildPollInterval=3s，ErrNotFound 视为「任务尚未创建」继续等（webhook 异步建任务窗口期），进度只在 status/phase 跃迁时打一行（json 模式走 stderr 保持 stdout 纯 JSON），--timeout 有界兜底（默认 5m，须与 --wait 搭配）；终态渲染完整详情后，未成功以 errBuildFailed（退出码 2）、超时以 errWaitTimeout（退出码 124）上抛，CI/agent 凭退出码判定。成功任务经 deploymentURLFor 带出对应环境访问 URL（与 app info 同源 GetDeploymentOverview，按 task.Environment 经 Env 选择器取址；URL 是结果装饰——仅 SUCCESS 查询、总览失败降级为空不影响主输出），table 尾行 URL:、json 平铺 url 字段。从 apps/dsl/app.yaml 读 app key，
  *        本地先行门控（openRepo 要求已 init、assertDeployable 要求有 commit 且工作树干净，脏/无仓库/无提交即报错，
  *        全在网络调用之前 fail-fast），再经 assertAppRegistered 用 Meta GetApp 把关 app 已注册（不存在即指引 app create -f，
  *        避免「有仓库、无 app」孤儿状态；在建仓库/推送之前短路），再按 app.KeyForEnv(beta) 定位承载 beta 环境的 app key（prod 的 beta 环境挂在 pairAppKey 上，beta app 的 beta 环境就是自己）幂等准备其仓库（MakeService.CreateResource）取 cloneUrl，
  *        用 go-git（纯 Go，不 shell-out）把当前 HEAD 推到固定分支（deployBranch，webhook 约定）；token 走 HTTP BasicAuth(make:<token>)。
  *        提交时机交还用户——deploy 不再自动 add/commit（建仓+ignore 由 `makecli app init` 负责）。
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
 package cmd
@@ -133,15 +133,7 @@ func runDeploy(force bool) error {
 		return err
 	}
 
-	// app 身份真相在 Meta Server——push 之前确认已注册，否则只 init 过的本地工程也能
-	// 推成功，留下「有仓库、无 app」的孤儿状态（app list 看不到）。网络门控，但刻意在
-	// 建仓库/推送之前：既不为不存在的 app 建孤儿仓库，也不白推一趟。
-	app, err := assertAppRegistered(appKey)
-	if err != nil {
-		return err
-	}
-	// beta 环境由配对中的哪个 app 承载（prod 的 beta 挂在 pairAppKey 上，beta app 就是自己），仓库也建在那个 app 名下
-	targetKey, err := app.KeyForEnv(envBeta)
+	cloneURL, token, err := betaRepoURL(appKey)
 	if err != nil {
 		return err
 	}
@@ -149,29 +141,43 @@ func runDeploy(force bool) error {
 	fmt.Printf("%-12s %s\n", "App:", appKey)
 	fmt.Printf("%-12s %s\n", "Environment:", envBeta)
 
-	client, token, err := newRepoClientFromProfile()
-	if err != nil {
-		return err
-	}
-
-	// CreateResource 幂等：组织/仓库不存在则创建，存在则复用，成功即可推送
-	repoInfo, err := client.CreateRepository(targetKey)
-	if err != nil {
-		return fmt.Errorf("准备代码仓库失败: %w", err)
-	}
-
-	// cloneURL 含内部组织 id 与仓库主机，是部署实现细节——只用于 push，不向用户展示
-	cloneURL := repoInfo.CloneURL()
-	if cloneURL == "" {
-		return fmt.Errorf("服务端未返回 app '%s'（%s 环境）的仓库地址", targetKey, envBeta)
-	}
-
 	if err := gitPushFunc(repo, cloneURL, token, force); err != nil {
 		return err
 	}
 
 	fmt.Printf("Deployed '%s' to %s\n", appKey, envBeta)
 	return nil
+}
+
+// betaRepoURL 定位 app 的 beta 代码仓库地址，连同 git 传输用的 token 一并返回；deploy（push）与 clone（fetch）共用。
+// 执行序：注册门控 → KeyForEnv(beta) → 幂等准备仓库 → cloneUrl。
+//   - app 身份真相在 Meta Server——先确认已注册，否则只 init 过的本地工程也能推成功，
+//     留下「有仓库、无 app」的孤儿状态（app list 看不到）；网络门控刻意在建仓库之前，不为不存在的 app 建孤儿仓库。
+//   - beta 环境由配对中的哪个 app 承载（prod 的 beta 挂在 pairAppKey 上，beta app 就是自己），仓库也在那个 app 名下。
+//   - CreateResource 幂等：组织/仓库不存在则创建，存在则复用。
+//   - cloneURL 含内部组织 id 与仓库主机，是实现细节——只用于 git 传输，不向用户展示。
+func betaRepoURL(appKey string) (cloneURL, token string, err error) {
+	app, err := assertAppRegistered(appKey)
+	if err != nil {
+		return "", "", err
+	}
+	targetKey, err := app.KeyForEnv(envBeta)
+	if err != nil {
+		return "", "", err
+	}
+	client, token, err := newRepoClientFromProfile()
+	if err != nil {
+		return "", "", err
+	}
+	repoInfo, err := client.CreateRepository(targetKey)
+	if err != nil {
+		return "", "", fmt.Errorf("准备代码仓库失败: %w", err)
+	}
+	cloneURL = repoInfo.CloneURL()
+	if cloneURL == "" {
+		return "", "", fmt.Errorf("服务端未返回 app '%s'（%s 环境）的仓库地址", targetKey, envBeta)
+	}
+	return cloneURL, token, nil
 }
 
 // runDeployStatus 查询当前 HEAD 提交的构建/部署进度（wait=true 时阻塞至终态）。
@@ -359,12 +365,17 @@ func appKeyFromDSL() (string, error) {
 	if _, err := os.Stat(appDSLPath); err != nil {
 		return "", fmt.Errorf("%s not found: run deploy from the app project root (or create it with `makecli app create`)", appDSLPath)
 	}
-	manifest, err := loadAppManifestFromFile(appDSLPath)
+	return appKeyFromManifest(appDSLPath)
+}
+
+// appKeyFromManifest 读取指定 app.yaml 的 key 并校验格式（deploy 读工程根、clone 读目标目录，同一读法）。
+func appKeyFromManifest(path string) (string, error) {
+	manifest, err := loadAppManifestFromFile(path)
 	if err != nil {
 		return "", err
 	}
 	if err := validResourceKey(manifest.Key); err != nil {
-		return "", fmt.Errorf("invalid app key in %s: %w", appDSLPath, err)
+		return "", fmt.Errorf("invalid app key in %s: %w", path, err)
 	}
 	return manifest.Key, nil
 }

@@ -1,10 +1,10 @@
 /**
  * [INPUT]: 依赖 agents（embed gitignore.tmpl）、github.com/go-git/go-git/v5（及 config/object 子包）、bytes、errors、fmt、os、path/filepath、strings、time
- * [OUTPUT]: 对外提供（包内）openRepo / initGitRepo / ensureGitignore / gitSignature / stageAndCommit / assertDeployable
+ * [OUTPUT]: 对外提供（包内）openRepo / initGitRepo / ensureGitignore / gitSignature / stageAndCommit / assertDeployable / assertClean
  * [POS]: cmd 模块的共享 go-git 原语层——把「与具体命令无关」的 git 操作收口一处，被 app_init（init+gitignore）、
- *        app_create（init+gitignore+initial commit）、deploy（openRepo+assertDeployable）三处复用，消除 deploy.go 独占 git 逻辑的耦合。
- *        命令专属的 git 约定（部署分支 / 匿名 remote / push）仍内聚于 deploy.go，不下沉到此。
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ *        app_create（init+gitignore+initial commit）、deploy（openRepo+assertDeployable）、clone（initGitRepo+assertClean）四处复用，消除 deploy.go 独占 git 逻辑的耦合。
+ *        命令专属的 git 约定（部署分支 / 匿名 remote / push / fetch+ff）仍内聚于 deploy.go / clone.go，不下沉到此。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
 package cmd
@@ -158,6 +158,13 @@ func assertDeployable(repo *git.Repository) error {
 	if _, err := repo.Head(); err != nil {
 		return fmt.Errorf("nothing committed yet; commit before deploy:\n  git add -A && git commit -m \"your message\"")
 	}
+	return assertClean(repo, "commit before deploy:\n%s  git add -A && git commit -m \"your message\"")
+}
+
+// assertClean 校验工作树干净（无未暂存/未提交/未跟踪改动），HEAD 可以不存在（空仓库也算干净）。
+// hint 是脏树时给用户的指引，含一个 %s 占位接收 status 文本——deploy 要求先 commit，clone 要求先 commit 或清理，
+// 门控本身同一条，只有指引不同。
+func assertClean(repo *git.Repository, hint string) error {
 	w, err := repo.Worktree()
 	if err != nil {
 		return fmt.Errorf("读取工作树失败: %w", err)
@@ -167,7 +174,7 @@ func assertDeployable(repo *git.Repository) error {
 		return fmt.Errorf("读取工作树状态失败: %w", err)
 	}
 	if !status.IsClean() {
-		return fmt.Errorf("working tree has uncommitted changes; commit before deploy:\n%s  git add -A && git commit -m \"your message\"", status.String())
+		return fmt.Errorf("working tree has uncommitted changes; "+hint, status.String())
 	}
 	return nil
 }
