@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 context、encoding/json、time
  * [OUTPUT]: 对外提供 Backend 接口、ExecOptions、Session、Message/MessageType、Result、TokenUsage——外接 brain 的统一执行契约
- * [POS]: internal/daemon/adapter 的接口层——单方法 Backend.Execute（agent-design/Design.md §8.1 的 adapter 契约），
+ * [POS]: internal/daemon/adapter 的接口层——单方法 Backend.Execute（agent-design/docs/execution.md §8.1 的 adapter 契约），
  *        CLI 差异止步于各实现文件
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */

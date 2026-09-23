@@ -1,7 +1,7 @@
 # internal/agent/
 > L2 | 父级: /CLAUDE.md
 
-keyless 本地 agent（隐藏命令 `makecli agent` 的执行层，agent-design/Design.md §8.2）：标准 OpenAI 兼容客户端指向 gateway `/v1/chat/completions`，模型名用平台别名，配额与五维计量在模型面自动生效——设备端零厂商 key。默认即 code agent：gateway Provider（llm/gateway.go）+ 七工具注册表（root=cwd）+ 目录信任确认钩子 + 两层循环（code.go 编排、render.go 行式渲染）；`--chat-only` 退回 v1 纯聊天（client.go/repl.go）。两条 REPL 都支持 `!<cmd>` 本地命令直通（bang.go，不发起 LLM 请求）。内核五子包自 github.com/smallnest/pigo（MIT）移植。
+keyless 本地 agent（隐藏命令 `makecli agent` 的执行层，agent-design/docs/execution.md §8.2）：标准 OpenAI 兼容客户端指向 gateway `/v1/chat/completions`，模型名用平台别名，配额与五维计量在模型面自动生效——设备端零厂商 key。默认即 code agent：gateway Provider（llm/gateway.go）+ 七工具注册表（root=cwd）+ 目录信任确认钩子 + 两层循环（code.go 编排、render.go 行式渲染）；`--chat-only` 退回 v1 纯聊天（client.go/repl.go）。两条 REPL 都支持 `!<cmd>` 本地命令直通（bang.go，不发起 LLM 请求）。内核五子包自 github.com/smallnest/pigo（MIT）移植。
 
 ## 子包
 - `core/`: agent 内核叶子类型（Content/Message/AgentEvent 密封接口族、EventStream 泛型流、AgentTool 契约、hooks），纯 stdlib，其余子包的公共地基

@@ -20,7 +20,7 @@ import (
 	"github.com/qfeius/makecli/internal/daemon/adapter"
 )
 
-// 协议节拍（agent-design/Contract.md §7）。
+// 协议节拍（agent-design/docs/contracts/internal.md §7）。
 const (
 	heartbeatInterval = 15 * time.Second
 	claimInterval     = 3 * time.Second

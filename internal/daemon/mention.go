@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 protocol.go 的 Block/MentionTarget 与标准库 regexp；语义真相源 agent-design/Design.md §7.5（互@平台内直通）
+ * [INPUT]: 依赖 protocol.go 的 Block/MentionTarget 与标准库 regexp；语义真相源 agent-design/docs/channels.md §7.5（互@平台内直通）
  * [OUTPUT]: 对外（包内）提供 parseMentionBlocks——把 CLI 最终答复文本切成 text + mention 块序列
  * [POS]: internal/daemon 的出站 mention 解析——LLM 以 @Name 表达互@，此处是"文本 → 结构化 mention 块"的唯一物化点
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md

@@ -2,7 +2,7 @@
  * [INPUT]: 依赖 bufio、bytes、context、crypto/rand、encoding/json、fmt、io、net/http、strings、time
  * [OUTPUT]: 对外提供 Client（gateway /v1/chat/completions 的流式调用）、Message、NewSessionID、APIError
  * [POS]: internal/agent 的传输层——keyless 聊天：OpenAI 兼容 SSE 指向 gateway，
- *        设备端零厂商 key（agent-design/Design.md §8.2）；模型名是平台别名
+ *        设备端零厂商 key（agent-design/docs/execution.md §8.2）；模型名是平台别名
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 

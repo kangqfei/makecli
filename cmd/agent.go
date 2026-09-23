@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 github.com/spf13/cobra、errors、os、os/signal、syscall、internal/agent（传输 + code agent 编排）
  * [OUTPUT]: 对外提供 agentCmd——`makecli agent` 子命令（Hidden：keyless 通道未公开，不对普通用户展示）
- * [POS]: cmd 模块的自营脑设备版入口（agent-design/Design.md §8.2）：LLM 走平台——
+ * [POS]: cmd 模块的自营脑设备版入口（agent-design/docs/execution.md §8.2）：LLM 走平台——
  *        token 只开模型门，设备端零厂商 key；gateway 地址取值链与 daemon 一致。
  *        默认即 code agent（七工具 + 目录信任 + 两层循环）；--chat-only 退回纯聊天 ChatStream
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md

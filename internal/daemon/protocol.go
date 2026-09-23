@@ -1,8 +1,8 @@
 /**
- * [INPUT]: 依赖 encoding/json、time；线上形状真相源是 agent-design/Contract.md（黄金测试锁在 agent-contract 仓库）
+ * [INPUT]: 依赖 encoding/json、time；线上形状真相源是 agent-design/docs/contracts/internal.md（黄金测试锁在 agent-contract 仓库）
  * [OUTPUT]: daemon 的 runtime/Execution/Context wire 类型，保留文本工具调用、结果及错误事实
  * [POS]: internal/daemon 的协议词汇表。makecli 是公开 GitHub 仓库，无法 import 私有 agent-contract 模块，
- *        故在此镜像线上 JSON 形状；字段变更必须与 agent-contract 同步（先 Contract.md，后两边类型）
+ *        故在此镜像线上 JSON 形状；字段变更必须与 agent-contract 同步（先 agent-design/docs/contracts/internal.md，后两边类型）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -256,7 +256,7 @@ type Usage struct {
 	CacheCreationTokens int64 `json:"cacheCreationTokens,omitempty"`
 }
 
-// run 状态机目标值与类型化失败原因（Contract.md §3.3）。
+// run 状态机目标值与类型化失败原因（agent-design/docs/contracts/internal.md §3.3）。
 const (
 	RunStatusRunning   = "running"
 	RunStatusCompleted = "completed"

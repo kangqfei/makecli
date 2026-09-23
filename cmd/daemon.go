@@ -35,7 +35,7 @@ var (
 	daemonForeground       bool
 )
 
-// daemonCmd 是外接 brain 的接入点（agent-design/Design.md §8.1）。
+// daemonCmd 是外接 brain 的接入点（agent-design/docs/execution.md §8.1）。
 // 缺省即后台：跑完立刻回到提示符，常驻交给 launchd（等价 `daemon start`）；
 // --foreground 才在当前终端阻塞——launchd 拉起的正是这一形态。
 // stop/restart/status/uninstall 等托管面在 daemon_service.go。
