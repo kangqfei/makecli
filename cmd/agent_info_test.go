@@ -18,7 +18,7 @@ import (
 	"github.com/qfeius/makecli/internal/api"
 )
 
-const agentInfoTestBody = `{"code":200,"data":{"key":"poc_agent","name":"POC Agent","appKey":"agent_poc","description":"demo agent","modelKey":"deepseek","runtimeKey":"make-runtime-service","status":"disabled","prompt":"first line\nsecond line","meta":{"createdAt":"2026-10-13T00:00:00Z","updatedAt":"2026-10-14T00:00:00Z"},"plugins":[{"id":"binding_01","pluginKey":"mcp_make","enabled":false,"config":{"mode":"read"},"channelEndpoint":{"serverURL":"https://example.com/callback"}}]}}`
+const agentInfoTestBody = `{"code":200,"data":{"key":"poc_agent","name":"POC Agent","appKey":"agent_poc","description":"demo agent","modelKey":"deepseek","runtimeKey":"make-runtime-service","status":"disabled","prompt":"first line\nsecond line","meta":{"createdAt":"2026-10-13T00:00:00Z","updatedAt":"2026-10-14T00:00:00Z"},"plugins":[{"id":"binding_01","pluginKey":"mcp_make","enabled":false,"config":{"mode":"read"},"channelEndpoint":{"serverURL":"https://example.com/callback"},"secretFields":{"/token":{"configured":true,"maskedValue":"abcd********wxyz"},"/optional":{"configured":false,"maskedValue":null}}}]}}`
 
 func TestAgentInfoRemote(t *testing.T) {
 	for _, tc := range []struct {
@@ -62,7 +62,7 @@ func TestAgentInfoRemote(t *testing.T) {
 				t.Fatalf("calls = %d, want 1", calls)
 			}
 			if tc.output == outputTable {
-				for _, want := range []string{"Key:          poc_agent", "Name:         POC Agent", "demo agent", "App:          agent_poc", "deepseek", "make-runtime-service", "disabled", "2026-10-13", "2026-10-14", "first line\nsecond line", "mcp_make", "binding_01", "false", `{"mode":"read"}`, "https://example.com/callback"} {
+				for _, want := range []string{"Key:          poc_agent", "Name:         POC Agent", "demo agent", "App:          agent_poc", "deepseek", "make-runtime-service", "disabled", "2026-10-13", "2026-10-14", "first line\nsecond line", "mcp_make", "binding_01", "false", `{"mode":"read"}`, "https://example.com/callback", "/optional unconfigured", "/token configured abcd********wxyz"} {
 					if !strings.Contains(out, want) {
 						t.Errorf("missing %q in output: %s", want, out)
 					}
@@ -73,7 +73,9 @@ func TestAgentInfoRemote(t *testing.T) {
 			if err := json.Unmarshal([]byte(out), &result); err != nil {
 				t.Fatal(err)
 			}
-			if result.Key != "poc_agent" || result.Prompt != "first line\nsecond line" || len(result.Plugins) != 1 || result.Plugins[0].Config["mode"] != "read" || result.Plugins[0].Enabled || result.Plugins[0].ChannelEndpoint == nil {
+			secret := result.Plugins[0].SecretFields["/token"]
+			missing := result.Plugins[0].SecretFields["/optional"]
+			if result.Key != "poc_agent" || result.Prompt != "first line\nsecond line" || len(result.Plugins) != 1 || result.Plugins[0].Config["mode"] != "read" || result.Plugins[0].Enabled || result.Plugins[0].ChannelEndpoint == nil || !secret.Configured || secret.MaskedValue == nil || *secret.MaskedValue != "abcd********wxyz" || missing.Configured || missing.MaskedValue != nil {
 				t.Errorf("incomplete JSON: %s", out)
 			}
 		})

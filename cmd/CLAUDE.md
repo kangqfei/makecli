@@ -145,7 +145,7 @@
 - `daemon_test.go`: 覆盖 resolveAgentGatewayURL 取值链（三 context preset / env var 覆盖 / flag 最高优先），setContextFlag + MAKE_CLI_CONFIG_DIR 隔离全局态
 - `trace.go`: trace 顶级子命令（**Hidden**，内部排障工具）——按 `--id/-i` 与回溯窗口（`--days/-d`、`--hours/-H`（-h 归 help）、`--minutes/-m` 三者相加，全零默认 10 分钟，负值拒绝）拼 OpenObserve `/web/traces/trace-details` 直达 URL（org_identifier/stream 固定 default，from/to 为微秒级 Unix 时间戳，to=now、from=to−窗口），先回显 stdout 再经 openBrowserFunc 打开本地浏览器；基址随全局 --context 取 config.Context.TraceServerURL（dev/test → openobserve.qtech.cn，production → openobserve.qfei.cn）；traceURL/traceWindow 纯函数，nowFunc 包级可打桩
 - `trace_test.go`: 覆盖 Hidden 标记、短 flag（-i/-d/-H/-m）、URL 微秒时间戳与 from<to 生成规则、窗口合成（默认/相加/负值）、缺 --id 报错、三 context→OpenObserve 基址映射与 stdout 回显（openBrowserFunc/nowFunc 打桩）
-- `agent.go`: agent 命令组，默认显示帮助；管理命令归 AGENT MANAGEMENT COMMANDS，runtime/model/plugin 归 CATALOG COMMANDS；组织 create/list/info/delete/enable/disable 远端管理、runtime/model/plugin 目录与 run 本地运行，validAgentAppKey 统一应用归属校验。
+- `agent.go`: agent 命令组，默认显示帮助；管理命令归 AGENT MANAGEMENT COMMANDS，runtime/model/plugin 归 CATALOG COMMANDS；组织 create/update/list/info/delete/enable/disable 远端管理、runtime/model/plugin 目录与 run 本地运行，validAgentAppKey 统一应用归属校验。
 - `agent_plugin.go`: plugin 命令组默认帮助，list 不要求 App；分页 1/20，size 上限 100；表格摘要含 key/name/description/status/capabilities，JSON 保留完整 configSchema。
 - `agent_plugin_test.go`: httptest 验证插件目录请求、分页、权限凭证、完整 Schema、空列表和参数无请求。
 - `agent_model.go`: model 命令组默认帮助，list 不要求 App；分页 1/20，size 上限 100，表格展示模型标识/服务商/多模态能力，JSON 完整目录字段（含可选推理参数）。
@@ -156,8 +156,10 @@
 - `agent_run_test.go`: 验证参数迁移与无参约束、token 优先级、编程/纯聊天一次性与 REPL 的 HTTP/SSE 接线。
 - `agent_status.go`: enable/disable 共用命令构造，--app 必填，仅提交 key/appKey/status，输出保存后的完整 JSON 或启停回执。
 - `agent_status_test.go`: httptest 验证启停状态、参数顺序、仅状态更新、凭证、完整响应和失败无输出。
-- `agent_info.go`: agent info <agentKey> --app <appKey>，单次只读 GetResource，基本信息/提示词/插件表格与完整 JSON 输出；支持 --app 放在 info 前。
-- `agent_info_test.go`: httptest 验证详情路由、参数顺序、完整配置、插件与空列表显示、鉴权/不存在错误和输入无请求。
+- `agent_info.go`: agent info <agentKey> --app <appKey>，单次只读 GetResource，基本信息/提示词/插件表格（含 secretFields 摘要）与完整 JSON 输出；支持 --app 放在 info 前。
+- `agent_info_test.go`: httptest 验证详情路由、参数顺序、完整配置、插件、secretFields 摘要与 JSON、空列表显示、鉴权/不存在错误和输入无请求。
+- `agent_update.go`: agent update <agentKey> --app <appKey> --plugins-json，整表替换插件绑定；已有项带 id，新增项省略 id，writeOnly 密钥省略即保留；不发送名称、提示词、模型或状态。
+- `agent_update_test.go`: httptest 验证带 id / 不带 id / 空数组的 UpdateResource 请求、显式 false、不回写 secretFields、JSON 回执中的密钥摘要、非法输入零请求和失败无成功回执。
 - `agent_delete.go`: agent delete <agentKey> --app <appKey>，必填实际环境应用，校验后输入 Agent key 确认（显示所属 App），--yes/-y 跳过、非 TTY 拒绝；确认通过后单次删除；auto/table/json 输出，JSON 返回 key/appKey/deleted，历史保留。
 - `agent_delete_test.go`: httptest 验证删除路由、应用范围、全局凭证、输出、参数校验无请求、输入 key 确认、--yes/-y 跳过、取消与非 TTY 零请求及失败无成功回执。
 - `agent_list.go`: agent list --app <appKey> 分页列出实际应用内的 Agent；appKey 经 celString 转成 filter.expression 等值条件，--page 默认 1、--size 默认 20 且上限 100；输出沿用 app list 的 auto/table/json 与 count/page/size/total，概要不展开 prompt/plugins。
@@ -178,7 +180,7 @@ app.go → clone.go / pull.go → runAppSync → deploy.go / git.go
          clone_test.go（复用 deploy_test.go 的本地仓库夹具）
        → app_list.go（list / +favo）→ runAppList → api.ListApps
          app_list_test.go（快捷查询与显式筛选等价）
-agent.go → agent_create.go / agent_list.go / agent_delete.go / agent_info.go / agent_status.go → internal/api/agent.go
+agent.go → agent_create.go / agent_update.go / agent_list.go / agent_delete.go / agent_info.go / agent_status.go → internal/api/agent.go
            agent_delete_test.go（删除范围、确认门禁、路由、回执与失败验证）
 agent.go → agent_plugin.go → internal/api/agent_plugin.go（插件目录）
 agent.go → agent_model.go → internal/api/agent_model.go（模型目录）
@@ -231,6 +233,8 @@ apply.go → api.UpdateApp（配对应用契约）/ saveAppVariable（Beta runti
 - 2026-10-14：新增 agent model list，只读分页查询模型目录，不要求 --app，输出沿用 runtime list。
 
 - 2026-10-14：新增 agent plugin list，查询可用插件目录，JSON 完整保留 configSchema；不要求 --app。
+
+- 2026-11-04：新增 agent update。--plugins-json 整表替换绑定，id 标识已有项并在省略 writeOnly 密钥时保留；创建命令仍拒绝绑定 id。agent info 表格与 JSON 展示 secretFields。
 
 - 2026-10-14：帮助模板支持 Cobra 原生分组；agent 分为管理与目录，隐藏 run 不展示，其他未分组命令保留原帮助。
 

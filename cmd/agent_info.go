@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 依赖 cmd/client、validResourceKey、validAgentAppKey、cmd/output、internal/api、encoding/json、fmt、os、github.com/olekukonko/tablewriter、github.com/spf13/cobra
- * [OUTPUT]: 对外提供 newAgentInfoCmd；包内 runAgentInfo/renderAgentInfo
- * [POS]: cmd/agent 的详情子命令，按 appKey + key 只读查询，文本展示基本信息、提示词与插件，JSON 返回完整配置
+ * [INPUT]: 依赖 cmd/client、validResourceKey、validAgentAppKey、cmd/output、internal/api、encoding/json、fmt、maps、os、slices、strings、github.com/olekukonko/tablewriter、github.com/spf13/cobra
+ * [OUTPUT]: 对外提供 newAgentInfoCmd；包内 runAgentInfo/renderAgentInfo/formatPluginSecrets
+ * [POS]: cmd/agent 的详情子命令，按 appKey + key 只读查询，文本展示基本信息、提示词、插件与 secretFields，JSON 返回完整配置
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
@@ -10,7 +10,10 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
+	"strings"
 
 	"github.com/olekukonko/tablewriter"
 	"github.com/qfeius/makecli/internal/api"
@@ -83,13 +86,34 @@ func renderAgentInfo(agent *api.Agent) error {
 		if plugin.ChannelEndpoint != nil {
 			endpoint = plugin.ChannelEndpoint.ServerURL
 		}
-		rows[i] = []string{plugin.ID, plugin.PluginKey, fmt.Sprint(plugin.Enabled), string(config), endpoint}
+		rows[i] = []string{plugin.ID, plugin.PluginKey, fmt.Sprint(plugin.Enabled), string(config), endpoint, formatPluginSecrets(plugin.SecretFields)}
 	}
 	fmt.Println()
 	table := tablewriter.NewTable(os.Stdout)
-	table.Header("ID", "PLUGIN", "ENABLED", "CONFIG", "ENDPOINT")
+	table.Header("ID", "PLUGIN", "ENABLED", "CONFIG", "ENDPOINT", "SECRETS")
 	if err := table.Bulk(rows); err != nil {
 		return err
 	}
 	return table.Render()
+}
+
+// formatPluginSecrets 按 JSON Pointer 排序展示只读密钥状态，不输出明文。
+func formatPluginSecrets(fields map[string]api.AgentPluginSecretField) string {
+	if len(fields) == 0 {
+		return "-"
+	}
+	keys := slices.Sorted(maps.Keys(fields))
+	parts := make([]string, len(keys))
+	for i, key := range keys {
+		field := fields[key]
+		state := "unconfigured"
+		if field.Configured {
+			state = "configured"
+		}
+		parts[i] = key + " " + state
+		if field.MaskedValue != nil && *field.MaskedValue != "" {
+			parts[i] += " " + *field.MaskedValue
+		}
+	}
+	return strings.Join(parts, ", ")
 }

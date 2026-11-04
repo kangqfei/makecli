@@ -241,7 +241,17 @@ makecli agent --app agent_poc info poc_agent
 makecli agent info poc_agent --app agent_poc --output json
 ```
 
-`--app` 必填，使用实际环境 App key；文本展示基本信息、提示词和插件配置，JSON 返回完整 Agent 配置。
+`--app` 必填，使用实际环境 App key；文本展示基本信息、提示词和插件配置。插件表增加 SECRETS 列，按 JSON Pointer 展示 `configured` / `unconfigured` 与 `maskedValue` 摘要，不回显明文。JSON 返回完整 Agent 配置，包含只读 `plugins[].secretFields`。
+
+### 更新 Agent 插件
+
+```bash
+makecli agent update expense_agent --app expense_app \
+  --plugins-json '[{"id":"binding_01","pluginKey":"mcp_make","config":{"mode":"read"}}]'
+makecli agent update expense_agent --app expense_app --plugins-json @plugins.json --output json
+```
+
+`--app` 与 `--plugins-json` 必填。`plugins` 数组会整表替换：已有绑定必须带上 `agent info` 返回的 `id`，省略 `config` 里的 writeOnly 密钥即保留原值；新增绑定不要带 `id`，并提供必填密钥。空数组 `[]` 会移除全部绑定。名称、提示词、模型和状态不在这条命令里修改。创建命令的 `--plugins-json` 仍不接受 `id`。
 
 ### 启用或停用 Agent
 

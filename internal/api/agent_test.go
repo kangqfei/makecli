@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 agent.go 和 Client，encoding/json、errors、net/http、net/http/httptest、strings、testing
- * [OUTPUT]: 覆盖 appKey 应用归属、Agent 创建、列表、详情、删除与状态更新请求、公开配置与概要响应、可选字段及错误回执
- * [POS]: internal/api 的 Agent 创建、列表、详情与删除协议回归测试，httptest 隔离网络
+ * [OUTPUT]: 覆盖 appKey 应用归属、Agent 创建、列表、详情、删除、状态更新与插件绑定替换请求、公开配置、secretFields 与概要响应、可选字段及错误回执
+ * [POS]: internal/api 的 Agent 创建、列表、详情、删除与插件更新协议回归测试，httptest 隔离网络
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
@@ -146,6 +146,150 @@ func TestGetAgent(t *testing.T) {
 			}
 			if err != nil || agent == nil || agent.Prompt != "hello" || len(agent.Plugins) != 1 || agent.Plugins[0].ID != "binding_01" {
 				t.Errorf("agent = %+v, err = %v", agent, err)
+			}
+		})
+	}
+}
+
+func TestGetAgentSecretFields(t *testing.T) {
+	body := `{"code":200,"data":{"key":"poc_agent","appKey":"agent_poc","prompt":"hello","plugins":[{"id":"binding_01","pluginKey":"channel_feishu","enabled":true,"config":{"appId":"cli"},"secretFields":{"/appSecret":{"configured":true,"maskedValue":"abcd********wxyz"},"/verificationToken":{"configured":false,"maskedValue":null}}}]}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	agent, err := New(srv.URL, "test-token").GetAgent("poc_agent", "agent_poc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := agent.Plugins[0].SecretFields
+	secret := fields["/appSecret"]
+	if !secret.Configured || secret.MaskedValue == nil || *secret.MaskedValue != "abcd********wxyz" {
+		t.Errorf("configured secret = %+v", secret)
+	}
+	missing := fields["/verificationToken"]
+	if missing.Configured || missing.MaskedValue != nil {
+		t.Errorf("unconfigured secret = %+v", missing)
+	}
+}
+
+func TestUpdateAgentPlugins(t *testing.T) {
+	masked := "abcd********wxyz"
+	response := func() string {
+		raw, err := json.Marshal(map[string]any{
+			"code": 200,
+			"data": Agent{
+				AgentSummary: AgentSummary{Key: "poc_agent", AppKey: "agent_poc", Status: "disabled"},
+				Plugins: []AgentPlugin{{
+					ID: "binding_01", PluginKey: "channel_feishu", Enabled: true,
+					Config: map[string]any{"appId": "cli"},
+					SecretFields: map[string]AgentPluginSecretField{
+						"/appSecret": {Configured: true, MaskedValue: &masked},
+					},
+				}},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}()
+	for _, tc := range []struct {
+		name    string
+		plugins *[]PluginBindingInput
+		wantID  bool
+	}{
+		{"with binding id", &[]PluginBindingInput{{ID: "binding_01", PluginKey: "channel_feishu", Config: map[string]any{"appId": "cli"}}}, true},
+		{"without binding id", &[]PluginBindingInput{{PluginKey: "mcp_make", Config: map[string]any{}}}, false},
+		{"empty table", &[]PluginBindingInput{}, false},
+		{"omit plugins", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/agent/v1/agent" || r.Header.Get("X-Make-Target") != "MakeService.UpdateResource" {
+					t.Errorf("unexpected routing: %s %s", r.Method, r.URL)
+				}
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				if body["key"] != "poc_agent" || body["appKey"] != "agent_poc" || body["status"] != nil || body["secretFields"] != nil {
+					t.Errorf("unexpected agent fields: %v", body)
+				}
+				plugins, exists := body["plugins"]
+				switch {
+				case tc.plugins == nil:
+					if exists {
+						t.Errorf("omitted plugins were sent: %v", plugins)
+					}
+				case !exists:
+					t.Error("plugins array was omitted")
+				default:
+					items, ok := plugins.([]any)
+					if !ok || len(items) != len(*tc.plugins) {
+						t.Fatalf("plugins = %v", plugins)
+					}
+					if len(items) == 1 {
+						item := items[0].(map[string]any)
+						_, hasID := item["id"]
+						if hasID != tc.wantID {
+							t.Errorf("id present = %v, want %v (%v)", hasID, tc.wantID, item)
+						}
+						if tc.wantID && item["id"] != "binding_01" {
+							t.Errorf("id = %v", item["id"])
+						}
+						if _, hasSecret := item["secretFields"]; hasSecret {
+							t.Errorf("write payload must not echo secretFields: %v", item)
+						}
+						config := item["config"].(map[string]any)
+						if _, leaked := config["appSecret"]; leaked {
+							t.Errorf("omitted writeOnly secret was sent: %v", config)
+						}
+					}
+				}
+				_, _ = w.Write([]byte(response))
+			}))
+			defer srv.Close()
+			saved, err := New(srv.URL, "test-token").UpdateAgent(UpdateAgentRequest{
+				Key: "poc_agent", AppKey: "agent_poc", Plugins: tc.plugins,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.name == "empty table" {
+				return
+			}
+			secret := saved.Plugins[0].SecretFields["/appSecret"]
+			if !secret.Configured || secret.MaskedValue == nil || *secret.MaskedValue != masked {
+				t.Errorf("saved secret = %+v", secret)
+			}
+		})
+	}
+}
+
+func TestUpdateAgentErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+		auth             bool
+	}{
+		{"forbidden", `{"code":403,"msg":"forbidden","data":{"reason":"FORBIDDEN"}}`, "forbidden", false},
+		{"auth", `{"code":401,"msg":"unauthorized","data":{}}`, "鉴权失败", true},
+		{"gateway auth", `{"code":990300403,"msg":"expired"}`, "鉴权失败", true},
+		{"wrong scope", `{"code":200,"data":{"key":"poc_agent","appKey":"other_app"}}`, "不一致", false},
+		{"empty", `{"code":200,"data":{}}`, "不一致", false},
+		{"malformed", `{`, "响应", false},
+		{"wrong data", `{"code":200,"data":[]}`, "Agent 响应", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			saved, err := New(srv.URL, "test-token").UpdateAgent(UpdateAgentRequest{Key: "poc_agent", AppKey: "agent_poc"})
+			if err == nil || !strings.Contains(err.Error(), tc.want) || saved != nil {
+				t.Fatalf("saved = %+v, error = %v, want %q", saved, err, tc.want)
+			}
+			if tc.auth && !errors.Is(err, ErrAuthFailed) {
+				t.Errorf("auth must use ErrAuthFailed: %v", err)
 			}
 		})
 	}

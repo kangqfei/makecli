@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 client.go 的 Client.do / writeStatusErr / authFailedErr、record.go 的 expression，encoding/json、fmt
- * [OUTPUT]: 对外提供 CreateAgentRequest / CreateAgentPlugin / AgentSummary / Agent / AgentPlugin 类型和 Client.CreateAgent / ListAgents / DeleteAgent / GetAgent / SetAgentStatus 方法
- * [POS]: internal/api 的 Agent 配置创建、列表、详情、删除与启停层，调用 /agent/v1/agent，appKey 表达实际应用归属；与本地聊天 internal/agent 无依赖
+ * [OUTPUT]: 对外提供 CreateAgentRequest / CreateAgentPlugin / PluginBindingInput / UpdateAgentRequest / AgentSummary / Agent / AgentPlugin / AgentPluginSecretField 类型和 Client.CreateAgent / ListAgents / DeleteAgent / GetAgent / SetAgentStatus / UpdateAgent 方法
+ * [POS]: internal/api 的 Agent 配置创建、列表、详情、删除、启停与插件绑定替换层，调用 /agent/v1/agent，appKey 表达实际应用归属；与本地聊天 internal/agent 无依赖
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
@@ -51,11 +51,26 @@ func (c *Client) GetAgent(key, appKey string) (*Agent, error) {
 	return &agent, nil
 }
 
-// CreateAgentPlugin 只接受创建字段；enabled 用指针区分省略与显式 false。
+// CreateAgentPlugin 只接受创建字段，不带绑定 id；enabled 用指针区分省略与显式 false。
 type CreateAgentPlugin struct {
 	PluginKey string         `json:"pluginKey"`
 	Enabled   *bool          `json:"enabled,omitempty"`
 	Config    map[string]any `json:"config"`
+}
+
+// PluginBindingInput 是插件绑定写入。已有绑定带 id 以便整表替换时省略 writeOnly 密钥仍保留；新增绑定省略 id。
+type PluginBindingInput struct {
+	ID        string         `json:"id,omitempty"`
+	PluginKey string         `json:"pluginKey"`
+	Enabled   *bool          `json:"enabled,omitempty"`
+	Config    map[string]any `json:"config"`
+}
+
+// UpdateAgentRequest 只提交定位字段和本次插件表。Plugins 为 nil 时省略，服务端保持原绑定；非 nil（含空数组）整表替换。
+type UpdateAgentRequest struct {
+	Key     string                `json:"key"`
+	AppKey  string                `json:"appKey"`
+	Plugins *[]PluginBindingInput `json:"plugins,omitempty"`
 }
 
 // AgentSummary 是列表的公开概要，不展开 prompt 和 plugins。
@@ -80,12 +95,19 @@ type Agent struct {
 	Plugins []AgentPlugin `json:"plugins"`
 }
 
-// AgentPlugin 是绑定的公开投影，与不接受绑定 id 的创建输入分开。
+// AgentPluginSecretField 是 writeOnly 密钥的只读投影。MaskedValue 为摘要；未配置时为 null，不可回写。
+type AgentPluginSecretField struct {
+	Configured  bool    `json:"configured"`
+	MaskedValue *string `json:"maskedValue"`
+}
+
+// AgentPlugin 是绑定的公开投影。SecretFields 以 JSON Pointer 为键，只读，不进入创建或更新请求。
 type AgentPlugin struct {
-	ID              string         `json:"id"`
-	PluginKey       string         `json:"pluginKey"`
-	Enabled         bool           `json:"enabled"`
-	Config          map[string]any `json:"config"`
+	ID              string                            `json:"id"`
+	PluginKey       string                            `json:"pluginKey"`
+	Enabled         bool                              `json:"enabled"`
+	Config          map[string]any                    `json:"config"`
+	SecretFields    map[string]AgentPluginSecretField `json:"secretFields,omitempty"`
 	ChannelEndpoint *struct {
 		ServerURL string `json:"serverURL"`
 	} `json:"channelEndpoint,omitempty"`
@@ -193,6 +215,32 @@ func (c *Client) SetAgentStatus(key, appKey, status string) (*Agent, error) {
 	}
 	if saved.Key != key || saved.AppKey != appKey || saved.Status != status {
 		return nil, fmt.Errorf("更新 Agent 响应与请求的 key/appKey/status 不一致")
+	}
+	return &saved, nil
+}
+
+// UpdateAgent 用 UpdateResource 替换插件绑定表，其余 Agent 字段省略并由服务端保持。
+func (c *Client) UpdateAgent(req UpdateAgentRequest) (*Agent, error) {
+	var result struct {
+		Code    int             `json:"code"`
+		Message string          `json:"msg"`
+		Data    json.RawMessage `json:"data"`
+	}
+	if err := c.do("MakeService.UpdateResource", "/agent/v1/agent", req, &result); err != nil {
+		return nil, err
+	}
+	if result.Code == 401 {
+		return nil, authFailedErr(result.Code, result.Message)
+	}
+	if result.Code != 200 {
+		return nil, writeStatusErr(result.Code, result.Message, result.Data)
+	}
+	var saved Agent
+	if err := json.Unmarshal(result.Data, &saved); err != nil {
+		return nil, fmt.Errorf("无效的 Agent 响应: %w", err)
+	}
+	if saved.Key != req.Key || saved.AppKey != req.AppKey {
+		return nil, fmt.Errorf("更新 Agent 响应与请求的 key/appKey 不一致")
 	}
 	return &saved, nil
 }

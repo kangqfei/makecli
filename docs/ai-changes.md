@@ -1,3 +1,9 @@
+## 2026-11-04：Agent 插件绑定 secretFields 与 update
+- 摘要：控制面客户端对齐插件绑定合同。详情读取 `secretFields.{configured,maskedValue}`；`agent update --plugins-json` 经 UpdateResource 整表替换绑定，已有项带 id，省略 writeOnly 密钥由服务端保留。
+- 涉及文件：internal/api/agent.go、cmd/agent_update.go、cmd/agent_info.go、对应测试、README 与模块地图。
+- 决策：创建输入继续拒绝 id；更新请求只发送 key/appKey/plugins，不改名称、提示词、模型或状态。不增加 PluginContent、发布或 session/run/event API，也不改 deploy/overview 词汇。
+- 验证：`gofmt`、`go vet ./...`、`golangci-lint run ./...`、`go test ./... -count=1` 与 `node --test npm/*.test.js`。
+
 ## 2026-10-26：TC-013 初始化期间构建日志漏读回归
 - 摘要：先保存构建起点，再扫描部署历史，防止期间新增构建失败被 tail=0 跳过。
 - 涉及文件：logs_stages、logs_follow_start_test、帮助、README及模块地图；详见 ai-changes-app-build-logs.md。

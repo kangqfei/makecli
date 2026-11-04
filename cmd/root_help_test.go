@@ -55,7 +55,7 @@ func TestAgentGroupedHelp(t *testing.T) {
 	if management < 0 || catalog <= management || flags <= catalog {
 		t.Fatalf("unexpected group order: %s", out)
 	}
-	for _, name := range []string{"create", "delete", "disable", "enable", "info", "list"} {
+	for _, name := range []string{"create", "delete", "disable", "enable", "info", "list", "update"} {
 		if strings.Count(out, "  "+name+" ") != 1 || !strings.Contains(out[management:catalog], "  "+name+" ") {
 			t.Errorf("management command %s missing, duplicated, or misplaced: %s", name, out)
 		}

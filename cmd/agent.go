@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 fmt、strings、unicode/utf8、github.com/spf13/cobra、agent_{create,list,delete,info,status,run,runtime,model,plugin}.go
+ * [INPUT]: 依赖 fmt、strings、unicode/utf8、github.com/spf13/cobra、agent_{create,update,list,delete,info,status,run,runtime,model,plugin}.go
  * [OUTPUT]: 对外提供 agentCmd；包内 newAgentCmd / addAgentCommandGroup 和 validAgentAppKey
  * [POS]: cmd/agent 命令组，配置管理与目录查询分组展示，显式本地 run 保持隐藏；无子命令显示帮助
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
@@ -23,7 +23,7 @@ func newAgentCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error { return cmd.Help() },
 	}
 	addAgentCommandGroup(cmd, &cobra.Group{ID: "management", Title: "AGENT MANAGEMENT COMMANDS"},
-		newAgentCreateCmd(), newAgentListCmd(), newAgentDeleteCmd(), newAgentInfoCmd(),
+		newAgentCreateCmd(), newAgentUpdateCmd(), newAgentListCmd(), newAgentDeleteCmd(), newAgentInfoCmd(),
 		newAgentStatusCmd("enable", "enabled"), newAgentStatusCmd("disable", "disabled"))
 	addAgentCommandGroup(cmd, &cobra.Group{ID: "catalog", Title: "CATALOG COMMANDS"},
 		newAgentRuntimeCmd(), newAgentModelCmd(), newAgentPluginCmd())
